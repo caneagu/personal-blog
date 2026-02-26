@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{{ site_title }}</title>
+    <script src="{{ url_for('static', filename='base.js') }}"></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+  </head>
+  <body
+    class="{{ 'is-authenticated' if is_authenticated else 'is-logged-out' }}"
+    data-authenticated="{{ '1' if is_authenticated else '0' }}"
+    data-login-url="{{ url_for('login') }}"
+  >
+    {% if is_authenticated %}
+    <header class="site-header site-header-auth">
+      <div class="header-controls">
+        <nav class="top-nav">
+        <a href="{{ url_for('articles') }}">Articles</a>
+          <a href="{{ url_for('publish') }}">Publish</a>
+        <a href="{{ url_for('settings') }}">Settings</a>
+        <form method="post" action="{{ url_for('logout') }}" class="inline-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+          <button type="submit" class="nav-button">Logout</button>
+        </form>
+        </nav>
+        <button data-theme-toggle class="theme-toggle" type="button" aria-label="Toggle dark mode">Dark</button>
+      </div>
+    </header>
+    {% endif %}
+    {% if not is_authenticated %}
+    <div class="public-topbar">
+      {% if public_back_href and public_back_label %}
+      <a class="public-back-link" href="{{ public_back_href }}">{{ public_back_label }}</a>
+      {% else %}
+      <span></span>
+      {% endif %}
+      <button data-theme-toggle class="theme-toggle" type="button" aria-label="Toggle dark mode">Dark</button>
+    </div>
+    {% endif %}
+    <main class="page">{% block content %}{% endblock %}</main>
+    {% block extra_scripts %}{% endblock %}
+  </body>
+</html>

@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block content %}
+<article class="article article-single">
+  <p class="muted-text">Preview</p>
+  <h1>{{ post.title }}</h1>
+  <p class="article-date-full">{{ post.published_label }}</p>
+  {% if post.summary %}
+  <p class="muted-text">{{ post.summary }}</p>
+  {% endif %}
+  <section class="markdown-body">{{ post.body_html | safe }}</section>
+</article>
+{% endblock %}

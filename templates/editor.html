@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% block content %}
+{% if message %}<p class="flash">{{ message }}</p>{% endif %}
+
+<form
+  method="post"
+  action="{{ url_for('publish') }}"
+  class="writer-shell"
+  id="writer-form"
+  data-upload-url="{{ url_for('upload_image') }}"
+  data-csrf-token="{{ csrf_token }}"
+>
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+  <header class="writer-topbar">
+    <div class="writer-left">
+      <a href="{{ url_for('home') }}" class="back-link">Back to site</a>
+      <span class="dot">•</span>
+      <button type="button" id="drafts-toggle" class="draft-toggle">{{ initial.status|capitalize }}</button>
+    </div>
+    <div class="writer-right">
+      <button type="submit" name="action" value="draft" class="draft-btn">Save Draft</button>
+      <button
+        type="submit"
+        formmethod="post"
+        formaction="{{ url_for('preview_article') }}"
+        formtarget="_blank"
+        formnovalidate
+        class="draft-btn"
+      >
+        Preview
+      </button>
+      <button type="submit" class="publish-btn">Publish</button>
+    </div>
+  </header>
+
+  <div id="drafts-panel" class="drafts-panel" hidden>
+    <h3>Load Draft</h3>
+    <ul>
+      {% for draft in drafts %}
+      <li>
+        <span>
+          <a href="{{ url_for('publish_existing', slug=draft.slug) }}">{{ draft.title or draft.slug }}</a>
+          <button
+            type="button"
+            class="delete-link draft-delete-btn"
+            data-delete-url="{{ url_for('delete_article', slug=draft.slug) }}"
+            data-next="{{ request.path }}"
+          >
+            Delete
+          </button>
+        </span>
+        <span class="draft-meta">{{ draft.published_at.strftime("%b %d, %Y") }}</span>
+      </li>
+      {% else %}
+      <li class="draft-empty">No drafts yet.</li>
+      {% endfor %}
+    </ul>
+  </div>
+
+  <section class="writer-meta">
+    <label>
+      Slug
+      <input name="slug" value="{{ initial.slug }}" placeholder="auto-from-title" />
+    </label>
+    <label>
+      Publish date
+      <input type="date" name="published_at" value="{{ initial.published_at }}" required />
+    </label>
+    <label>
+      Summary (optional)
+      <input name="summary" value="{{ initial.summary }}" placeholder="Auto-generated if left blank" />
+    </label>
+  </section>
+
+  <main class="writer-canvas-wrap">
+    <input
+      name="title"
+      class="title-input"
+      placeholder="Title"
+      value="{{ initial.title }}"
+      required
+      maxlength="180"
+    />
+
+    <div
+      id="editor-canvas"
+      class="editor-canvas markdown-body"
+      contenteditable="true"
+      spellcheck="true"
+      aria-label="Post content"
+    >{% if initial.body_html %}{{ initial.body_html | safe }}{% else %}<p><br></p>{% endif %}</div>
+    <p class="editor-tip">Drag and drop an image into the editor to upload and insert it.</p>
+  </main>
+
+  <input type="hidden" name="body_html" id="body_html" />
+  <input type="hidden" name="body" id="body" value="{{ initial.body }}" />
+</form>
+
+<div id="floating-toolbar" class="floating-toolbar" role="toolbar" aria-hidden="true">
+  <button type="button" class="toolbar-btn" data-cmd="p" title="Paragraph">P</button>
+  <button type="button" class="toolbar-btn" data-cmd="bold" title="Bold"><strong>B</strong></button>
+  <button type="button" class="toolbar-btn" data-cmd="italic" title="Italic"><em>I</em></button>
+  <button type="button" class="toolbar-btn" data-cmd="link" title="Link">Link</button>
+  <button type="button" class="toolbar-btn" data-cmd="h2" title="Heading">H2</button>
+  <button type="button" class="toolbar-btn" data-cmd="quote" title="Quote">"</button>
+  <button type="button" class="toolbar-btn" data-cmd="ul" title="Bulleted list">•</button>
+  <button type="button" class="toolbar-btn" data-cmd="ol" title="Numbered list">1.</button>
+  <button type="button" class="toolbar-btn" data-cmd="code" title="Code block">{ }</button>
+</div>
+
+<div id="image-toolbar" class="image-toolbar" role="toolbar" aria-hidden="true">
+  <span class="image-toolbar-label">Image</span>
+  <button type="button" class="toolbar-btn" data-size="25">25%</button>
+  <button type="button" class="toolbar-btn" data-size="50">50%</button>
+  <button type="button" class="toolbar-btn" data-size="75">75%</button>
+  <button type="button" class="toolbar-btn" data-size="100">100%</button>
+</div>
+
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='editor.js') }}" defer></script>
+{% endblock %}
+{% endblock %}

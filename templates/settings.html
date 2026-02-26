@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="form-page">
+  <h1>Settings</h1>
+  <p class="muted-text">Customize blog branding and homepage copy.</p>
+
+  {% if message %}<p class="flash">{{ message }}</p>{% endif %}
+
+  <form method="post" class="settings-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+    <label>
+      Site title (browser tab / RSS title)
+      <input name="site_title" value="{{ settings.site_title }}" required maxlength="120" />
+    </label>
+
+    <label>
+      Publisher name (homepage large title)
+      <input name="publisher_name" value="{{ settings.publisher_name }}" required maxlength="120" />
+    </label>
+
+    <label>
+      Role label (shown under publisher name)
+      <input name="profile_role" value="{{ settings.profile_role }}" required maxlength="80" />
+    </label>
+
+    <label>
+      Homepage intro paragraph 1
+      <textarea name="home_intro_primary" rows="4" required>{{ settings.home_intro_primary }}</textarea>
+    </label>
+
+    <label>
+      Homepage intro paragraph 2
+      <textarea name="home_intro_secondary" rows="4" required>{{ settings.home_intro_secondary }}</textarea>
+    </label>
+
+    <button type="submit" class="publish-btn">Save settings</button>
+  </form>
+</section>
+{% endblock %}

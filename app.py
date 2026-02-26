@@ -1,0 +1,908 @@
+from __future__ import annotations
+
+import datetime as dt
+import html
+import hmac
+import logging
+import os
+import re
+import secrets
+import time
+import uuid
+from dataclasses import dataclass
+from functools import wraps
+from html.parser import HTMLParser
+from pathlib import Path
+from urllib.parse import urlparse
+from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for
+import markdown
+from markdownify import markdownify as html_to_markdown
+from werkzeug.exceptions import RequestEntityTooLarge
+from werkzeug.security import check_password_hash
+import yaml
+
+BASE_DIR = Path(__file__).parent
+CONTENT_DIR = BASE_DIR / "content" / "posts"
+UPLOAD_DIR = BASE_DIR / "static" / "uploads"
+SETTINGS_PATH = BASE_DIR / "content" / "site_settings.yml"
+APP_CONFIG_PATH = Path(os.getenv("BLOG_CONFIG_PATH", str(BASE_DIR / "content" / "config.yml")))
+SITE_TITLE = "Personal Blog"
+ALLOWED_MARKDOWN_TAGS = {
+    "a",
+    "blockquote",
+    "br",
+    "code",
+    "em",
+    "h1",
+    "h2",
+    "h3",
+    "hr",
+    "img",
+    "li",
+    "ol",
+    "p",
+    "pre",
+    "strong",
+    "table",
+    "tbody",
+    "td",
+    "th",
+    "thead",
+    "tr",
+    "ul",
+}
+ALLOWED_MARKDOWN_ATTRIBUTES = {
+    "a": ["href", "title", "rel"],
+    "img": ["src", "alt", "data-size", "class"],
+    "th": ["colspan", "rowspan"],
+    "td": ["colspan", "rowspan"],
+}
+ALLOWED_URL_PROTOCOLS = {"http", "https", "mailto", "tel"}
+STRIP_CONTENT_TAGS = {"script", "style"}
+VOID_TAGS = {"br", "hr", "img"}
+DEFAULT_APP_CONFIG = {
+    "admin_user": "admin",
+    "admin_password": "",
+    "admin_password_hash": "",
+    "secret_key": "",
+}
+DEFAULT_SETTINGS = {
+    "site_title": SITE_TITLE,
+    "publisher_name": "Personal Blog",
+    "profile_role": "Writer",
+    "home_intro_primary": (
+        "This is a minimalist article site focused on clear writing, long-form ideas, and durable links. "
+        "It is designed as a clean writing-focused publication with your own content pipeline."
+    ),
+    "home_intro_secondary": (
+        "All articles are authored in markdown and published through the built-in editor. "
+        "You can publish new work at any time from the Publish page."
+    ),
+}
+CSRF_FIELD_NAME = "csrf_token"
+CSRF_SESSION_KEY = "_csrf_token"
+SAFE_POST_ENDPOINTS = {"preview"}
+LOGIN_ATTEMPT_WINDOW_SECONDS = 300
+LOGIN_ATTEMPT_LIMIT = 10
+LOGIN_ATTEMPT_TRACK_LIMIT = 2048
+LOGIN_ATTEMPTS: dict[str, list[float]] = {}
+POSTS_CACHE: dict[str, object] = {"key": None, "posts": []}
+SETTINGS_CACHE: dict[str, object] = {"stamp": None, "settings": DEFAULT_SETTINGS.copy()}
+LOGGER = logging.getLogger(__name__)
+
+
+@dataclass
+class Post:
+    slug: str
+    title: str
+    published_at: dt.date
+    summary: str
+    body_markdown: str
+    status: str = "published"
+
+    @property
+    def published_label(self) -> str:
+        return self.published_at.strftime("%B %-d, %Y") if os.name != "nt" else self.published_at.strftime("%B %#d, %Y")
+
+    @property
+    def body_html(self) -> str:
+        return render_markdown(self.body_markdown)
+
+    @property
+    def is_draft(self) -> bool:
+        return self.status == "draft"
+
+
+def load_app_config() -> dict[str, str]:
+    config = DEFAULT_APP_CONFIG.copy()
+    if APP_CONFIG_PATH.exists():
+        payload = yaml.safe_load(APP_CONFIG_PATH.read_text(encoding="utf-8")) or {}
+        if isinstance(payload, dict):
+            for key in config:
+                value = payload.get(key)
+                if value is not None:
+                    config[key] = str(value).strip()
+
+    env_overrides = {
+        "admin_user": os.getenv("BLOG_ADMIN_USER"),
+        "admin_password": os.getenv("BLOG_ADMIN_PASSWORD"),
+        "admin_password_hash": os.getenv("BLOG_ADMIN_PASSWORD_HASH"),
+        "secret_key": os.getenv("BLOG_SECRET_KEY"),
+    }
+    for key, value in env_overrides.items():
+        if value:
+            config[key] = value.strip()
+
+    if not config["secret_key"]:
+        config["secret_key"] = secrets.token_urlsafe(48)
+        LOGGER.warning("BLOG_SECRET_KEY is not set. Generated an ephemeral secret key for this process.")
+    return config
+
+
+def env_flag(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def configured_trusted_hosts() -> list[str]:
+    default_hosts = {"127.0.0.1", "localhost", ".localhost", "::1", "[::1]"}
+    raw_hosts = os.getenv("BLOG_TRUSTED_HOSTS", "")
+    env_hosts = {host.strip() for host in raw_hosts.split(",") if host.strip()}
+    hosts = sorted(default_hosts | env_hosts)
+    return hosts
+
+
+def sanitize_url(url_value: str) -> str:
+    candidate = (url_value or "").strip()
+    if not candidate:
+        return ""
+    parsed = urlparse(candidate)
+    if parsed.scheme and parsed.scheme.lower() not in ALLOWED_URL_PROTOCOLS:
+        return ""
+    if candidate.lower().startswith("javascript:"):
+        return ""
+    return candidate
+
+
+def sanitize_image_classes(class_value: str) -> str:
+    allowed = {"img-size-25", "img-size-50", "img-size-75", "img-size-100"}
+    classes = [token for token in (class_value or "").split() if token in allowed]
+    unique_classes = sorted(set(classes))
+    return " ".join(unique_classes)
+
+
+def sanitize_image_size(size_value: str) -> str:
+    allowed = {"25", "50", "75", "100"}
+    candidate = (size_value or "").strip()
+    return candidate if candidate in allowed else "100"
+
+
+class HTMLFragmentSanitizer(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self.open_stack: list[str] = []
+        self.strip_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        normalized_tag = tag.lower()
+        if normalized_tag in STRIP_CONTENT_TAGS:
+            self.strip_depth += 1
+            return
+        if self.strip_depth > 0 or normalized_tag not in ALLOWED_MARKDOWN_TAGS:
+            return
+
+        allowed = ALLOWED_MARKDOWN_ATTRIBUTES.get(normalized_tag, [])
+        rendered_attrs: list[str] = []
+        for key, value in attrs:
+            normalized_key = key.lower()
+            if normalized_key not in allowed:
+                continue
+            attr_value = value or ""
+            if normalized_key in {"href", "src"}:
+                attr_value = sanitize_url(attr_value)
+                if not attr_value:
+                    continue
+            if normalized_tag == "img" and normalized_key == "data-size":
+                attr_value = sanitize_image_size(attr_value)
+            if normalized_tag == "img" and normalized_key == "class":
+                attr_value = sanitize_image_classes(attr_value)
+                if not attr_value:
+                    continue
+            escaped = html.escape(attr_value, quote=True)
+            rendered_attrs.append(f'{normalized_key}="{escaped}"')
+
+        attrs_fragment = (" " + " ".join(rendered_attrs)) if rendered_attrs else ""
+        self.parts.append(f"<{normalized_tag}{attrs_fragment}>")
+        if normalized_tag not in VOID_TAGS:
+            self.open_stack.append(normalized_tag)
+
+    def handle_endtag(self, tag: str) -> None:
+        normalized_tag = tag.lower()
+        if normalized_tag in STRIP_CONTENT_TAGS:
+            self.strip_depth = max(0, self.strip_depth - 1)
+            return
+        if self.strip_depth > 0:
+            return
+        if normalized_tag in VOID_TAGS:
+            return
+        if self.open_stack and self.open_stack[-1] == normalized_tag:
+            self.open_stack.pop()
+            self.parts.append(f"</{normalized_tag}>")
+
+    def handle_data(self, data: str) -> None:
+        if self.strip_depth > 0:
+            return
+        self.parts.append(html.escape(data))
+
+    def handle_entityref(self, name: str) -> None:
+        if self.strip_depth > 0:
+            return
+        self.parts.append(f"&{name};")
+
+    def handle_charref(self, name: str) -> None:
+        if self.strip_depth > 0:
+            return
+        self.parts.append(f"&#{name};")
+
+    def get_output(self) -> str:
+        while self.open_stack:
+            self.parts.append(f"</{self.open_stack.pop()}>")
+        return "".join(self.parts)
+
+
+def sanitize_html_fragment(html_content: str) -> str:
+    sanitizer = HTMLFragmentSanitizer()
+    sanitizer.feed(html_content or "")
+    sanitizer.close()
+    return sanitizer.get_output()
+
+
+def render_markdown(markdown_text: str) -> str:
+    html_content = markdown.markdown(
+        markdown_text or "",
+        extensions=["fenced_code", "tables", "toc", "nl2br"],
+        output_format="html5",
+    )
+    return sanitize_html_fragment(html_content)
+
+
+APP_CONFIG = load_app_config()
+
+
+app = Flask(__name__)
+app.config["TRUSTED_HOSTS"] = configured_trusted_hosts()
+app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024  # 25MB uploads
+app.config["SECRET_KEY"] = APP_CONFIG["secret_key"]
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_SECURE"] = env_flag("BLOG_SECURE_COOKIES", True)
+app.config["PERMANENT_SESSION_LIFETIME"] = dt.timedelta(hours=12)
+
+
+SLUG_PATTERN = re.compile(r"[^a-z0-9]+")
+
+
+def slugify(text: str) -> str:
+    candidate = SLUG_PATTERN.sub("-", text.lower()).strip("-")
+    return candidate or "untitled"
+
+
+def parse_post(path: Path) -> Post:
+    text = path.read_text(encoding="utf-8")
+    if text.startswith("---") and text.count("---") >= 2:
+        _, fm, body = text.split("---", 2)
+        parsed_metadata = yaml.safe_load(fm) or {}
+        metadata = parsed_metadata if isinstance(parsed_metadata, dict) else {}
+    else:
+        metadata = {}
+        body = text
+
+    title = metadata.get("title") or path.stem.replace("-", " ").title()
+    published_raw = metadata.get("published_at") or dt.date.today().isoformat()
+    summary = metadata.get("summary") or ""
+    status = str(metadata.get("status") or "published").strip().lower()
+    if status not in {"published", "draft"}:
+        status = "published"
+
+    try:
+        published_at = dt.date.fromisoformat(str(published_raw))
+    except ValueError:
+        published_at = dt.date.today()
+    return Post(
+        slug=path.stem,
+        title=title,
+        published_at=published_at,
+        summary=summary,
+        body_markdown=body.strip(),
+        status=status,
+    )
+
+
+def list_posts(include_drafts: bool = False) -> list[Post]:
+    posts = load_all_posts_cached()
+    if include_drafts:
+        return posts
+    return [post for post in posts if not post.is_draft]
+
+
+def content_state_stamp() -> tuple[tuple[str, int, int], ...]:
+    if not CONTENT_DIR.exists():
+        return ()
+    files: list[tuple[str, int, int]] = []
+    for path in sorted(CONTENT_DIR.glob("*.md")):
+        stat = path.stat()
+        files.append((path.name, stat.st_mtime_ns, stat.st_size))
+    return tuple(files)
+
+
+def invalidate_posts_cache() -> None:
+    POSTS_CACHE["key"] = None
+    POSTS_CACHE["posts"] = []
+
+
+def load_all_posts_cached() -> list[Post]:
+    state = content_state_stamp()
+    if POSTS_CACHE.get("key") == state:
+        return list(POSTS_CACHE.get("posts", []))
+
+    if not CONTENT_DIR.exists():
+        parsed_posts: list[Post] = []
+    else:
+        parsed_posts = []
+        for path in CONTENT_DIR.glob("*.md"):
+            try:
+                parsed_posts.append(parse_post(path))
+            except Exception:
+                LOGGER.exception("Skipping invalid post file: %s", path)
+    sorted_posts = sorted(parsed_posts, key=lambda p: p.published_at, reverse=True)
+    POSTS_CACHE["key"] = state
+    POSTS_CACHE["posts"] = sorted_posts
+    return list(sorted_posts)
+
+
+def get_post(slug: str) -> Post | None:
+    safe_slug = slugify(slug)
+    for post in load_all_posts_cached():
+        if post.slug == safe_slug:
+            return post
+    return None
+
+
+def delete_post(slug: str) -> bool:
+    safe_slug = slugify(slug)
+    path = CONTENT_DIR / f"{safe_slug}.md"
+    if not path.exists():
+        return False
+    path.unlink()
+    invalidate_posts_cache()
+    return True
+
+
+def save_post(
+    title: str,
+    published_at: str,
+    summary: str,
+    body: str,
+    slug: str | None = None,
+    status: str = "published",
+) -> str:
+    CONTENT_DIR.mkdir(parents=True, exist_ok=True)
+    normalized_title = title.strip()
+    if not normalized_title:
+        raise ValueError("Title is required.")
+    if len(normalized_title) > 180:
+        raise ValueError("Title must be at most 180 characters.")
+    try:
+        dt.date.fromisoformat(published_at)
+    except ValueError as exc:
+        raise ValueError("Publish date must be a valid ISO date (YYYY-MM-DD).") from exc
+
+    cleaned_slug = slugify(slug or normalized_title)
+    path = CONTENT_DIR / f"{cleaned_slug}.md"
+
+    metadata = {
+        "title": normalized_title,
+        "published_at": published_at,
+        "summary": summary.strip()[:500],
+        "status": "draft" if status == "draft" else "published",
+    }
+
+    payload = "---\n" + yaml.safe_dump(metadata, sort_keys=False).strip() + "\n---\n\n" + body.strip() + "\n"
+    path.write_text(payload, encoding="utf-8")
+    invalidate_posts_cache()
+    return cleaned_slug
+
+
+def make_summary(text: str) -> str:
+    cleaned = re.sub(r"\s+", " ", re.sub(r"[#>*`_~\-]", " ", text)).strip()
+    return cleaned[:180] + ("..." if len(cleaned) > 180 else "")
+
+
+def csrf_token() -> str:
+    token = session.get(CSRF_SESSION_KEY)
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session[CSRF_SESSION_KEY] = token
+    return token
+
+
+def request_has_valid_csrf() -> bool:
+    expected = session.get(CSRF_SESSION_KEY)
+    provided = request.form.get(CSRF_FIELD_NAME) or request.headers.get("X-CSRF-Token")
+    if not expected or not provided:
+        return False
+    return hmac.compare_digest(expected, provided)
+
+
+def is_safe_next_url(next_url: str | None) -> bool:
+    if not next_url:
+        return False
+    parsed = urlparse(next_url)
+    return not parsed.scheme and not parsed.netloc and next_url.startswith("/")
+
+
+def client_ip() -> str:
+    remote_addr = request.remote_addr or "unknown"
+    # Proxy headers are user-controlled unless a trusted reverse proxy strips/sets them.
+    if not env_flag("BLOG_TRUST_PROXY_HEADERS", False):
+        return remote_addr
+
+    forwarded_for = request.headers.get("X-Forwarded-For", "")
+    if forwarded_for:
+        candidate = forwarded_for.split(",")[0].strip()
+        if candidate:
+            return candidate
+    real_ip = request.headers.get("X-Real-IP", "").strip()
+    return real_ip or remote_addr
+
+
+def prune_login_attempts(now: float | None = None) -> None:
+    current = now if now is not None else time.time()
+    stale_ips: list[str] = []
+    for ip, attempts in LOGIN_ATTEMPTS.items():
+        active = [stamp for stamp in attempts if current - stamp <= LOGIN_ATTEMPT_WINDOW_SECONDS]
+        if active:
+            LOGIN_ATTEMPTS[ip] = active
+        else:
+            stale_ips.append(ip)
+    for ip in stale_ips:
+        LOGIN_ATTEMPTS.pop(ip, None)
+
+    if len(LOGIN_ATTEMPTS) <= LOGIN_ATTEMPT_TRACK_LIMIT:
+        return
+
+    recent_entries = sorted(
+        LOGIN_ATTEMPTS.items(),
+        key=lambda item: item[1][-1] if item[1] else 0.0,
+        reverse=True,
+    )[:LOGIN_ATTEMPT_TRACK_LIMIT]
+    LOGIN_ATTEMPTS.clear()
+    LOGIN_ATTEMPTS.update(recent_entries)
+
+
+def too_many_login_attempts(ip: str) -> bool:
+    now = time.time()
+    prune_login_attempts(now)
+    attempts = LOGIN_ATTEMPTS.get(ip, [])
+    return len(attempts) >= LOGIN_ATTEMPT_LIMIT
+
+
+def record_failed_login(ip: str) -> None:
+    now = time.time()
+    prune_login_attempts(now)
+    attempts = list(LOGIN_ATTEMPTS.get(ip, []))
+    attempts.append(now)
+    LOGIN_ATTEMPTS[ip] = attempts
+
+
+def clear_failed_logins(ip: str) -> None:
+    LOGIN_ATTEMPTS.pop(ip, None)
+
+
+def resolve_image_extension(stream) -> str:
+    stream.seek(0)
+    header = stream.read(64)
+    stream.seek(0)
+
+    if header.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png"
+    if header.startswith(b"\xff\xd8\xff"):
+        return ".jpg"
+    if header.startswith(b"GIF87a") or header.startswith(b"GIF89a"):
+        return ".gif"
+    if header.startswith(b"RIFF") and header[8:12] == b"WEBP":
+        return ".webp"
+    return ""
+
+
+def load_site_settings() -> dict[str, str]:
+    stamp: tuple[int, int] | None = None
+    if SETTINGS_PATH.exists():
+        stat = SETTINGS_PATH.stat()
+        stamp = (stat.st_mtime_ns, stat.st_size)
+    if SETTINGS_CACHE.get("stamp") == stamp:
+        return dict(SETTINGS_CACHE.get("settings", DEFAULT_SETTINGS.copy()))
+
+    settings = DEFAULT_SETTINGS.copy()
+    if SETTINGS_PATH.exists():
+        payload = yaml.safe_load(SETTINGS_PATH.read_text(encoding="utf-8")) or {}
+        if isinstance(payload, dict):
+            for key in settings:
+                value = payload.get(key)
+                if value is not None:
+                    settings[key] = str(value).strip()
+            if not settings["publisher_name"]:
+                settings["publisher_name"] = str(payload.get("site_title", DEFAULT_SETTINGS["publisher_name"])).strip()
+    SETTINGS_CACHE["stamp"] = stamp
+    SETTINGS_CACHE["settings"] = settings
+    return settings
+
+
+def save_site_settings(settings: dict[str, str]) -> None:
+    SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    SETTINGS_PATH.write_text(yaml.safe_dump(settings, sort_keys=False), encoding="utf-8")
+    SETTINGS_CACHE["stamp"] = None
+
+
+def admin_username() -> str:
+    return APP_CONFIG["admin_user"]
+
+
+def admin_password_hash() -> str:
+    return APP_CONFIG["admin_password_hash"]
+
+
+def verify_admin_password(password: str) -> bool:
+    provided_hash = admin_password_hash()
+    if provided_hash:
+        return check_password_hash(provided_hash, password)
+    configured_password = APP_CONFIG["admin_password"]
+    if not configured_password or configured_password == "admin123":
+        return False
+    return hmac.compare_digest(password, configured_password)
+
+
+def is_authenticated() -> bool:
+    return bool(session.get("authenticated"))
+
+
+def login_required(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        if not is_authenticated():
+            return redirect(url_for("login", next=request.path))
+        return view(*args, **kwargs)
+
+    return wrapped
+
+
+@app.before_request
+def enforce_csrf() -> None:
+    if request.method not in {"POST", "PUT", "PATCH", "DELETE"}:
+        return
+    if request.endpoint in SAFE_POST_ENDPOINTS:
+        return
+    if request.endpoint == "static":
+        return
+    if not request_has_valid_csrf():
+        abort(400, description="Invalid CSRF token.")
+
+
+@app.after_request
+def set_response_security_headers(response):
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "img-src 'self' data:; "
+        "style-src 'self'; "
+        "script-src 'self'; "
+        "connect-src 'self'; "
+        "object-src 'none'; "
+        "form-action 'self'; "
+        "base-uri 'self'; "
+        "frame-ancestors 'none'"
+    )
+    return response
+
+
+@app.context_processor
+def inject_template_globals():
+    host = request.host.split(":")[0] if request.host else "localhost"
+    back_href = None
+    back_label = None
+    endpoint = request.endpoint or ""
+    if endpoint == "article_detail":
+        back_href = url_for("articles")
+        back_label = "Back to Articles"
+    elif endpoint == "articles":
+        back_href = url_for("home")
+        back_label = "Back to Main Page"
+    return {
+        "site_settings": load_site_settings(),
+        "is_authenticated": is_authenticated(),
+        "csrf_token": csrf_token(),
+        "header_domain": host,
+        "public_back_href": back_href,
+        "public_back_label": back_label,
+    }
+
+
+@app.get("/")
+def home():
+    settings = load_site_settings()
+    posts = list_posts()
+    featured = posts[0] if posts else None
+    return render_template("home.html", site_title=settings["site_title"], featured=featured, posts=posts[:6])
+
+
+@app.get("/articles")
+def articles():
+    settings = load_site_settings()
+    posts = list_posts()
+    return render_template("articles.html", site_title=settings["site_title"], posts=posts)
+
+
+@app.get("/article/<slug>")
+def article_detail(slug: str):
+    settings = load_site_settings()
+    post = get_post(slug)
+    if not post:
+        abort(404)
+    if post.is_draft and not is_authenticated():
+        abort(404)
+    return render_template("article_detail.html", site_title=settings["site_title"], post=post)
+
+
+@app.get("/essays")
+def essays_legacy():
+    return redirect(url_for("articles"), code=301)
+
+
+@app.get("/essay/<slug>")
+def essay_detail_legacy(slug: str):
+    return redirect(url_for("article_detail", slug=slug), code=301)
+
+
+@app.route("/publish", methods=["GET", "POST"], endpoint="publish")
+@app.route("/editor", methods=["GET", "POST"])
+@login_required
+def editor():
+    settings = load_site_settings()
+    message = ""
+    initial = {
+        "title": "",
+        "published_at": dt.date.today().isoformat(),
+        "summary": "",
+        "body": "",
+        "body_html": "",
+        "slug": "",
+        "status": "draft",
+    }
+
+    if request.method == "POST":
+        raw_html = request.form.get("body_html", "")
+        body_markdown = request.form.get("body", "")
+        if raw_html and not body_markdown:
+            body_markdown = html_to_markdown(raw_html).strip()
+
+        summary = request.form.get("summary", "").strip()
+        if not summary:
+            summary = make_summary(body_markdown)
+
+        action = request.form.get("action", "publish").strip().lower()
+        status = "draft" if action == "draft" else "published"
+        initial = {
+            "title": request.form.get("title", ""),
+            "published_at": request.form.get("published_at", dt.date.today().isoformat()),
+            "summary": summary,
+            "body": body_markdown,
+            "body_html": sanitize_html_fragment(raw_html),
+            "slug": request.form.get("slug", ""),
+            "status": status,
+        }
+        try:
+            slug = save_post(
+                title=initial["title"],
+                published_at=initial["published_at"],
+                summary=initial["summary"],
+                body=initial["body"],
+                slug=initial["slug"],
+                status=initial["status"],
+            )
+            if status == "draft":
+                message = f"Draft saved: /publish/{slug}"
+            else:
+                message = f"Published successfully: /article/{slug}"
+        except ValueError as exc:
+            message = str(exc)
+
+    posts = list_posts(include_drafts=True)
+    drafts = [post for post in posts if post.is_draft]
+    return render_template(
+        "editor.html",
+        site_title=settings["site_title"],
+        message=message,
+        initial=initial,
+        posts=posts,
+        drafts=drafts,
+    )
+
+
+@app.get("/publish/<slug>", endpoint="publish_existing")
+@app.get("/editor/<slug>")
+@login_required
+def editor_existing(slug: str):
+    settings = load_site_settings()
+    post = get_post(slug)
+    if not post:
+        abort(404)
+
+    posts = list_posts(include_drafts=True)
+    initial = {
+        "title": post.title,
+        "published_at": post.published_at.isoformat(),
+        "summary": post.summary,
+        "body": post.body_markdown,
+        "body_html": post.body_html,
+        "slug": post.slug,
+        "status": post.status,
+    }
+    drafts = [item for item in posts if item.is_draft]
+    return render_template(
+        "editor.html",
+        site_title=settings["site_title"],
+        message="Editing existing article",
+        initial=initial,
+        posts=posts,
+        drafts=drafts,
+    )
+
+
+@app.post("/api/preview")
+def preview():
+    payload = request.get_json(silent=True) if request.is_json else None
+    body = payload.get("body", "") if isinstance(payload, dict) else ""
+    html_content = render_markdown(body)
+    return jsonify({"html": html_content})
+
+
+@app.post("/preview")
+@login_required
+def preview_article():
+    settings = load_site_settings()
+    title = request.form.get("title", "").strip() or "Untitled preview"
+    summary = request.form.get("summary", "").strip()
+    body_markdown = request.form.get("body", "")
+    published_raw = request.form.get("published_at", "").strip()
+    try:
+        published_at = dt.date.fromisoformat(published_raw) if published_raw else dt.date.today()
+    except ValueError:
+        published_at = dt.date.today()
+
+    post = Post(
+        slug="preview",
+        title=title,
+        published_at=published_at,
+        summary=summary,
+        body_markdown=body_markdown,
+        status="draft",
+    )
+    return render_template("preview.html", site_title=settings["site_title"], post=post)
+
+
+@app.post("/api/upload-image")
+@login_required
+def upload_image():
+    file = request.files.get("image")
+    if not file or not file.filename:
+        return jsonify({"error": "No image file provided"}), 400
+
+    extension = resolve_image_extension(file.stream)
+    if not extension:
+        return jsonify({"error": f"Unsupported image format: {extension or 'unknown'}"}), 400
+
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    stored_name = f"{uuid.uuid4().hex}{extension}"
+    destination = UPLOAD_DIR / stored_name
+    file.save(destination)
+
+    return jsonify({"url": url_for("static", filename=f"uploads/{stored_name}")})
+
+
+@app.post("/publish/delete/<slug>")
+@login_required
+def delete_article(slug: str):
+    delete_post(slug)
+    requested_next = request.form.get("next", "")
+    referrer_path = urlparse(request.referrer).path if request.referrer else ""
+    next_url = requested_next if is_safe_next_url(requested_next) else referrer_path
+    if not is_safe_next_url(next_url):
+        next_url = url_for("publish")
+    return redirect(next_url)
+
+
+@app.errorhandler(RequestEntityTooLarge)
+def handle_large_upload(_error):
+    max_mb = app.config["MAX_CONTENT_LENGTH"] // (1024 * 1024)
+    return jsonify({"error": f"Image is too large. Max size is {max_mb}MB."}), 413
+
+
+@app.get("/rss.xml")
+def rss_feed():
+    settings = load_site_settings()
+    posts = list_posts()[:20]
+    feed_items = []
+    for post in posts:
+        feed_items.append(
+            {
+                "title": html.escape(post.title),
+                "link": url_for("article_detail", slug=post.slug, _external=True),
+                "pub_date": post.published_at.strftime("%a, %d %b %Y 00:00:00 +0000"),
+                "description": html.escape(post.summary),
+            }
+        )
+
+    xml = render_template("rss.xml", site_title=settings["site_title"], items=feed_items)
+    return app.response_class(xml, mimetype="application/rss+xml")
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    settings = load_site_settings()
+    message = ""
+    if request.method == "POST":
+        ip = client_ip()
+        if too_many_login_attempts(ip):
+            message = "Too many failed attempts. Please try again in a few minutes."
+            return render_template("login.html", site_title=settings["site_title"], message=message), 429
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
+        if username == admin_username() and verify_admin_password(password):
+            clear_failed_logins(ip)
+            session.permanent = True
+            session["authenticated"] = True
+            session["username"] = username
+            next_candidate = request.args.get("next", "")
+            next_url = next_candidate if is_safe_next_url(next_candidate) else url_for("publish")
+            return redirect(next_url)
+        record_failed_login(ip)
+        message = "Invalid username or password"
+    return render_template("login.html", site_title=settings["site_title"], message=message)
+
+
+@app.post("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("home"))
+
+
+@app.route("/settings", methods=["GET", "POST"])
+@login_required
+def settings():
+    current = load_site_settings()
+    message = ""
+    if request.method == "POST":
+        updated = {
+            "site_title": request.form.get("site_title", "").strip() or DEFAULT_SETTINGS["site_title"],
+            "publisher_name": request.form.get("publisher_name", "").strip() or DEFAULT_SETTINGS["publisher_name"],
+            "profile_role": request.form.get("profile_role", "").strip() or DEFAULT_SETTINGS["profile_role"],
+            "home_intro_primary": request.form.get("home_intro_primary", "").strip() or DEFAULT_SETTINGS["home_intro_primary"],
+            "home_intro_secondary": request.form.get("home_intro_secondary", "").strip()
+            or DEFAULT_SETTINGS["home_intro_secondary"],
+        }
+        save_site_settings(updated)
+        current = updated
+        message = "Settings saved."
+    return render_template("settings.html", site_title=current["site_title"], settings=current, message=message)
+
+
+if __name__ == "__main__":
+    host = os.getenv("BLOG_HOST", "127.0.0.1")
+    port = int(os.getenv("BLOG_PORT", "5000"))
+    debug_mode = env_flag("BLOG_DEBUG", False)
+    app.run(host=host, port=port, debug=debug_mode)

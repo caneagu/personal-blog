@@ -1,0 +1,4 @@
+admin_user: admin
+admin_password: ''
+admin_password_hash: pbkdf2:sha256:1000000$replace_me$replace_me
+secret_key: replace-with-random-secret

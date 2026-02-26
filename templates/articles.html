@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="article-archive">
+  <h1>Articles</h1>
+  <ul class="article-list">
+    {% for post in posts %}
+    <li>
+      <span class="article-date">{{ post.published_at.strftime("%b %Y") }}</span>
+      <span>
+        <a href="{{ url_for('article_detail', slug=post.slug) }}">{{ post.title }}</a>
+        {% if is_authenticated %}
+        <a class="edit-link" href="{{ url_for('publish_existing', slug=post.slug) }}">Edit</a>
+        {% endif %}
+      </span>
+    </li>
+    {% else %}
+    <li>No articles published yet.</li>
+    {% endfor %}
+  </ul>
+</section>
+{% endblock %}

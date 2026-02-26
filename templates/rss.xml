@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0">
+  <channel>
+    <title>{{ site_title }}</title>
+    <link>{{ url_for('home', _external=True) }}</link>
+    <description>Recent articles</description>
+    {% for item in items %}
+    <item>
+      <title>{{ item.title }}</title>
+      <link>{{ item.link }}</link>
+      <pubDate>{{ item.pub_date }}</pubDate>
+      <description>{{ item.description }}</description>
+    </item>
+    {% endfor %}
+  </channel>
+</rss>

@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+.pycache/
+*.pyc
+.DS_Store
+.env
+.env.*
+content/config.yml
+.playwright-cli/

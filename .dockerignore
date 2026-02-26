@@ -1,0 +1,21 @@
+.git
+.gitignore
+.venv
+.pycache
+__pycache__/
+*.py[cod]
+*.swp
+*.swo
+.DS_Store
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.env
+.env.*
+
+# Local-only docs and scripts
+README.md
+scripts/
+
+# Local runtime secrets
+content/config.yml
