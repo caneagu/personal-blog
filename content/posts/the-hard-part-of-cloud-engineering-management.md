@@ -3,7 +3,7 @@ title: The Hard Part of Cloud Engineering Management
 published_at: '2026-02-22'
 summary: Cloud engineering management is a constant balancing act between reliability,
   speed, and people leadership under real production pressure.
-status: published
+status: draft
 ---
 
 Cloud engineering management looks simple from the outside: choose a platform, enforce standards, and keep systems online. In practice, the role is defined by continuous tradeoffs where every decision has technical, financial, and human consequences.

@@ -172,6 +172,37 @@ Compose notes:
 7. Keep `BLOG_DEBUG=0`.
 8. Keep `BLOG_SECURE_COOKIES=1`.
 
+## VM Provisioning (Nginx + Let's Encrypt)
+
+For a public Ubuntu/Debian VM, use the provisioning script:
+
+```bash
+sudo ./scripts/provision_vm.sh \
+  --domain blog.example.com \
+  --email admin@example.com \
+  --repo-url https://github.com/<owner>/personal-blog.git \
+  --app-dir /opt/personal-blog \
+  --branch main
+```
+
+What it configures:
+
+- Installs Docker, Docker Compose plugin, Nginx, Certbot.
+- Clones/updates the repo in `/opt/personal-blog` (or your `--app-dir`).
+- Creates/updates `.env` with production-safe proxy settings:
+  - `HOST_PORT=127.0.0.1:8080`
+  - `BLOG_TRUSTED_HOSTS=<your domain>`
+  - `BLOG_TRUST_PROXY_HEADERS=1`
+  - `BLOG_SECURE_COOKIES=1`
+- Starts the app with Docker Compose.
+- Provisions and installs Let's Encrypt certs in Nginx with HTTPS redirect.
+
+Requirements before running:
+
+1. DNS `A/AAAA` for your domain must point to the VM.
+2. Ports `80` and `443` must be reachable.
+3. Set a real `BLOG_ADMIN_PASSWORD_HASH` in `./.env` (the script exits if placeholder is still present).
+
 ## Content and Publishing
 
 Writing flow:

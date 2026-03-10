@@ -8,6 +8,9 @@
     <a class="edit-link edit-link-inline" href="{{ url_for('publish_existing', slug=post.slug) }}">Edit this article</a>
     {% endif %}
   </div>
+  {% if post.summary %}
+  <p class="article-summary">{{ post.summary }}</p>
+  {% endif %}
   <section class="markdown-body">{{ post.body_html | safe }}</section>
 </article>
 {% endblock %}

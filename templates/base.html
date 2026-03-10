@@ -10,6 +10,7 @@
   <body
     class="{{ 'is-authenticated' if is_authenticated else 'is-logged-out' }}"
     data-authenticated="{{ '1' if is_authenticated else '0' }}"
+    data-typography="{{ site_settings.typography_theme }}"
     data-login-url="{{ url_for('login') }}"
   >
     {% if is_authenticated %}
@@ -24,7 +25,16 @@
           <button type="submit" class="nav-button">Logout</button>
         </form>
         </nav>
-        <button data-theme-toggle class="theme-toggle" type="button" aria-label="Toggle dark mode">Dark</button>
+        <div class="topbar-actions">
+          {% if site_settings.linkedin_url %}
+          <a class="icon-circle-link" href="{{ site_settings.linkedin_url }}" target="_blank" rel="noopener noreferrer" aria-label="LinkedIn" title="LinkedIn">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path fill="currentColor" d="M6.94 8.12a1.53 1.53 0 1 1 0-3.06 1.53 1.53 0 0 1 0 3.06ZM5.6 19h2.67V9.8H5.6V19Zm7-9.2H10v9.2h2.67v-4.83c0-1.27.24-2.5 1.8-2.5 1.54 0 1.56 1.45 1.56 2.58V19h2.67v-5.3c0-2.6-.56-4.6-3.59-4.6-1.45 0-2.42.8-2.82 1.56h-.04V9.8Z"/>
+            </svg>
+          </a>
+          {% endif %}
+          <button data-theme-toggle class="theme-toggle" type="button" aria-label="Switch to dark mode" title="Switch to dark mode">☾</button>
+        </div>
       </div>
     </header>
     {% endif %}
@@ -35,7 +45,16 @@
       {% else %}
       <span></span>
       {% endif %}
-      <button data-theme-toggle class="theme-toggle" type="button" aria-label="Toggle dark mode">Dark</button>
+      <div class="topbar-actions">
+        {% if site_settings.linkedin_url %}
+        <a class="icon-circle-link" href="{{ site_settings.linkedin_url }}" target="_blank" rel="noopener noreferrer" aria-label="LinkedIn" title="LinkedIn">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path fill="currentColor" d="M6.94 8.12a1.53 1.53 0 1 1 0-3.06 1.53 1.53 0 0 1 0 3.06ZM5.6 19h2.67V9.8H5.6V19Zm7-9.2H10v9.2h2.67v-4.83c0-1.27.24-2.5 1.8-2.5 1.54 0 1.56 1.45 1.56 2.58V19h2.67v-5.3c0-2.6-.56-4.6-3.59-4.6-1.45 0-2.42.8-2.82 1.56h-.04V9.8Z"/>
+          </svg>
+        </a>
+        {% endif %}
+        <button data-theme-toggle class="theme-toggle" type="button" aria-label="Switch to dark mode" title="Switch to dark mode">☾</button>
+      </div>
     </div>
     {% endif %}
     <main class="page">{% block content %}{% endblock %}</main>

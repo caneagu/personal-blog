@@ -5,12 +5,17 @@
     <h1 class="profile-name">{{ site_settings.publisher_name }}</h1>
   </div>
   <p class="profile-role">{{ site_settings.profile_role }}</p>
-  <p>
-    {{ site_settings.home_intro_primary }}
-  </p>
-  <p>
-    {{ site_settings.home_intro_secondary }}
-  </p>
+  <div class="about-summary" data-about-summary>
+    <div class="about-summary-copy" data-about-copy>
+      <p>
+        {{ site_settings.home_intro_primary }}
+      </p>
+      <p>
+        {{ site_settings.home_intro_secondary }}
+      </p>
+    </div>
+    <button class="about-summary-toggle" type="button" data-about-toggle aria-expanded="false">Learn more</button>
+  </div>
 </section>
 
 <section class="article-archive">

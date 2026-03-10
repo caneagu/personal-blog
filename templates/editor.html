@@ -9,16 +9,19 @@
   id="writer-form"
   data-upload-url="{{ url_for('upload_image') }}"
   data-csrf-token="{{ csrf_token }}"
+  data-editor-key="{{ initial.original_slug or 'new' }}"
 >
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+  <input type="hidden" name="original_slug" value="{{ initial.original_slug }}" />
   <header class="writer-topbar">
     <div class="writer-left">
       <a href="{{ url_for('home') }}" class="back-link">Back to site</a>
       <span class="dot">•</span>
-      <button type="button" id="drafts-toggle" class="draft-toggle">{{ initial.status|capitalize }}</button>
+      <button type="button" id="drafts-toggle" class="draft-toggle" aria-expanded="false">{{ initial.status|capitalize }}</button>
+      <span id="editor-status" class="editor-status muted" aria-live="polite"></span>
     </div>
     <div class="writer-right">
-      <button type="submit" name="action" value="draft" class="draft-btn">Save Draft</button>
+      <button type="submit" name="action" value="draft" class="draft-btn" id="save-draft-btn">Save Draft</button>
       <button
         type="submit"
         formmethod="post"
@@ -26,12 +29,24 @@
         formtarget="_blank"
         formnovalidate
         class="draft-btn"
+        id="preview-btn"
       >
         Preview
       </button>
-      <button type="submit" class="publish-btn">Publish</button>
+      {% if initial.status == "published" %}
+      <button type="submit" class="draft-btn" name="action" value="draft">Unpublish</button>
+      {% endif %}
+      <button type="submit" class="publish-btn" id="publish-btn" name="action" value="publish">
+        {% if initial.status == "published" %}Update{% else %}Publish{% endif %}
+      </button>
     </div>
   </header>
+
+  <div id="restore-banner" class="editor-restore" hidden>
+    <span id="restore-draft-label">A local unsaved draft is available.</span>
+    <button type="button" class="draft-btn" id="restore-draft-btn">Restore</button>
+    <button type="button" class="draft-btn" id="discard-restore-btn">Discard</button>
+  </div>
 
   <div id="drafts-panel" class="drafts-panel" hidden>
     <h3>Load Draft</h3>
@@ -60,21 +75,22 @@
   <section class="writer-meta">
     <label>
       Slug
-      <input name="slug" value="{{ initial.slug }}" placeholder="auto-from-title" />
+      <input name="slug" id="slug-input" value="{{ initial.slug }}" placeholder="auto-from-title" />
     </label>
     <label>
       Publish date
-      <input type="date" name="published_at" value="{{ initial.published_at }}" required />
+      <input type="date" name="published_at" id="published-at-input" value="{{ initial.published_at }}" required />
     </label>
     <label>
       Summary (optional)
-      <input name="summary" value="{{ initial.summary }}" placeholder="Auto-generated if left blank" />
+      <input name="summary" id="summary-input" value="{{ initial.summary }}" placeholder="Auto-generated if left blank" />
     </label>
   </section>
 
   <main class="writer-canvas-wrap">
     <input
       name="title"
+      id="title-input"
       class="title-input"
       placeholder="Title"
       value="{{ initial.title }}"
@@ -89,7 +105,8 @@
       spellcheck="true"
       aria-label="Post content"
     >{% if initial.body_html %}{{ initial.body_html | safe }}{% else %}<p><br></p>{% endif %}</div>
-    <p class="editor-tip">Drag and drop an image into the editor to upload and insert it.</p>
+    <p class="editor-tip">Drop or paste images. Shortcuts: Ctrl/Cmd+S saves draft, Ctrl/Cmd+Enter publishes.</p>
+    <p id="editor-stats" class="editor-stats" aria-live="polite"></p>
   </main>
 
   <input type="hidden" name="body_html" id="body_html" />
@@ -116,7 +133,7 @@
   <button type="button" class="toolbar-btn" data-size="100">100%</button>
 </div>
 
+{% endblock %}
 {% block extra_scripts %}
 <script src="{{ url_for('static', filename='editor.js') }}" defer></script>
-{% endblock %}
 {% endblock %}

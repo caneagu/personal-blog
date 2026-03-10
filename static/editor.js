@@ -11,8 +11,23 @@
   const buttons = toolbar.querySelectorAll('[data-cmd]');
   const imageToolbar = document.getElementById('image-toolbar');
   const imageButtons = imageToolbar.querySelectorAll('[data-size]');
+  const titleInput = document.getElementById('title-input');
+  const slugInput = document.getElementById('slug-input');
+  const publishedAtInput = document.getElementById('published-at-input');
+  const summaryInput = document.getElementById('summary-input');
+  const saveDraftButton = document.getElementById('save-draft-btn');
+  const previewButton = document.getElementById('preview-btn');
+  const publishButton = document.getElementById('publish-btn');
+  const editorStatus = document.getElementById('editor-status');
+  const editorStats = document.getElementById('editor-stats');
+  const restoreBanner = document.getElementById('restore-banner');
+  const restoreDraftButton = document.getElementById('restore-draft-btn');
+  const discardRestoreButton = document.getElementById('discard-restore-btn');
+  const restoreDraftLabel = document.getElementById('restore-draft-label');
   const uploadUrl = form.dataset.uploadUrl || '';
   const csrfToken = form.dataset.csrfToken || '';
+  const editorKey = form.dataset.editorKey || 'new';
+  const autosaveKey = `blog-editor-autosave:${editorKey}`;
   const imageSizes = ['25', '50', '75', '100'];
   const editorDebugEnabled =
     new URLSearchParams(window.location.search).get('editorDebug') === '1' ||
@@ -20,8 +35,204 @@
   let savedRange = null;
   let toolbarTimer = null;
   let transformTimer = null;
+  let autosaveTimer = null;
+  let statusTimer = null;
   let isTransforming = false;
   let activeImage = null;
+  let pendingUploads = 0;
+  let hasSubmitted = false;
+  let initialSnapshot = null;
+  let isDirty = false;
+  let lastAutosaveNoticeAt = 0;
+  let restoreCandidate = null;
+  let slugTouched = Boolean((slugInput?.value || '').trim());
+
+  function setStatus(message, tone = '', clearAfterMs = 0) {
+    if (!editorStatus) return;
+    if (statusTimer) {
+      clearTimeout(statusTimer);
+      statusTimer = null;
+    }
+    editorStatus.textContent = message || '';
+    if (tone) editorStatus.dataset.tone = tone;
+    else delete editorStatus.dataset.tone;
+    if (clearAfterMs > 0) {
+      statusTimer = setTimeout(() => {
+        editorStatus.textContent = '';
+        delete editorStatus.dataset.tone;
+      }, clearAfterMs);
+    }
+  }
+
+  function countWords(text) {
+    const normalized = (text || '')
+      .replace(/<img\b[^>]*>/gi, ' image ')
+      .replace(/[`*_#>\-|]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!normalized) return 0;
+    return normalized.split(' ').filter(Boolean).length;
+  }
+
+  function updateEditorStats() {
+    if (!editorStats) return;
+    const markdownText = bodyMd.value || '';
+    const wordCount = countWords(markdownText);
+    const minutes = wordCount > 0 ? Math.max(1, Math.round(wordCount / 220)) : 0;
+    const imageCount = (canvas.querySelectorAll('img') || []).length;
+    if (!wordCount && !imageCount) {
+      editorStats.textContent = 'No content yet.';
+      return;
+    }
+    const imageLabel = imageCount ? ` \u2022 ${imageCount} image${imageCount === 1 ? '' : 's'}` : '';
+    editorStats.textContent = `${wordCount} words \u2022 ${minutes} min read${imageLabel}`;
+  }
+
+  function setSubmissionButtonsDisabled(disabled) {
+    if (saveDraftButton) saveDraftButton.disabled = disabled;
+    if (publishButton) publishButton.disabled = disabled;
+  }
+
+  function refreshUploadState() {
+    const uploading = pendingUploads > 0;
+    form.classList.toggle('is-uploading', uploading);
+    setSubmissionButtonsDisabled(uploading);
+    if (uploading) {
+      setStatus(`Uploading ${pendingUploads} image${pendingUploads === 1 ? '' : 's'}...`);
+    }
+  }
+
+  function createSlug(text) {
+    return (text || '')
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+  }
+
+  function maybeAutoUpdateSlug() {
+    if (!titleInput || !slugInput || slugTouched) return;
+    slugInput.value = createSlug(titleInput.value);
+  }
+
+  function snapshotState() {
+    return JSON.stringify({
+      title: titleInput ? titleInput.value : '',
+      slug: slugInput ? slugInput.value : '',
+      publishedAt: publishedAtInput ? publishedAtInput.value : '',
+      summary: summaryInput ? summaryInput.value : '',
+      bodyHtml: bodyHtml.value || '',
+      body: bodyMd.value || '',
+    });
+  }
+
+  function updateDirtyState() {
+    if (initialSnapshot === null) return false;
+    isDirty = snapshotState() !== initialSnapshot;
+    form.dataset.dirty = isDirty ? '1' : '0';
+    return isDirty;
+  }
+
+  function persistAutosave() {
+    if (!isDirty || hasSubmitted) return;
+    const payload = {
+      title: titleInput ? titleInput.value : '',
+      slug: slugInput ? slugInput.value : '',
+      publishedAt: publishedAtInput ? publishedAtInput.value : '',
+      summary: summaryInput ? summaryInput.value : '',
+      bodyHtml: bodyHtml.value || '',
+      savedAt: new Date().toISOString(),
+    };
+    try {
+      localStorage.setItem(autosaveKey, JSON.stringify(payload));
+      const now = Date.now();
+      if (now - lastAutosaveNoticeAt > 12000) {
+        setStatus('Local backup updated.', 'success', 1200);
+        lastAutosaveNoticeAt = now;
+      }
+    } catch (_err) {
+      setStatus('Could not save local backup.', 'error', 2500);
+    }
+  }
+
+  function scheduleAutosave() {
+    if (initialSnapshot === null || hasSubmitted) return;
+    if (autosaveTimer) clearTimeout(autosaveTimer);
+    autosaveTimer = setTimeout(() => {
+      if (updateDirtyState()) persistAutosave();
+    }, 900);
+  }
+
+  function clearAutosave() {
+    try {
+      localStorage.removeItem(autosaveKey);
+    } catch (_err) {}
+  }
+
+  function loadAutosave() {
+    try {
+      const raw = localStorage.getItem(autosaveKey);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') return null;
+      return parsed;
+    } catch (_err) {
+      return null;
+    }
+  }
+
+  function autosaveSignature(payload) {
+    return JSON.stringify({
+      title: payload?.title || '',
+      slug: payload?.slug || '',
+      publishedAt: payload?.publishedAt || '',
+      summary: payload?.summary || '',
+      bodyHtml: payload?.bodyHtml || '',
+    });
+  }
+
+  function applyAutosaveDraft(payload) {
+    if (!payload) return;
+    if (titleInput) titleInput.value = payload.title || '';
+    if (slugInput) slugInput.value = payload.slug || '';
+    if (publishedAtInput && payload.publishedAt) publishedAtInput.value = payload.publishedAt;
+    if (summaryInput) summaryInput.value = payload.summary || '';
+    canvas.innerHTML = payload.bodyHtml || '<p><br></p>';
+    normalizeCanvasImages();
+    syncBody({ autosave: false });
+    updateDirtyState();
+    slugTouched = Boolean((slugInput?.value || '').trim());
+    setStatus('Local draft restored.', 'success', 2200);
+  }
+
+  function presentRestoreBanner(payload) {
+    if (!restoreBanner || !restoreDraftLabel) return;
+    const when = payload && payload.savedAt ? new Date(payload.savedAt) : null;
+    if (when && Number.isFinite(when.getTime())) {
+      restoreDraftLabel.textContent = `Local draft from ${when.toLocaleString()} available.`;
+    } else {
+      restoreDraftLabel.textContent = 'A local unsaved draft is available.';
+    }
+    restoreBanner.hidden = false;
+  }
+
+  function hideRestoreBanner() {
+    if (restoreBanner) restoreBanner.hidden = true;
+  }
+
+  function hasMeaningfulContent(markdownText) {
+    const source = (markdownText || '').trim();
+    if (!source) return false;
+    if (/<img\b[^>]*>/i.test(source)) return true;
+    const cleaned = source
+      .replace(/```[\s\S]*?```/g, ' code ')
+      .replace(/`[^`]*`/g, ' code ')
+      .replace(/\[[^\]]*\]\([^)]+\)/g, ' link ')
+      .replace(/[#>*_\-\n\r]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return cleaned.length > 0;
+  }
 
   function nodeLabel(node) {
     if (!node) return 'null';
@@ -103,8 +314,28 @@
     });
   }
 
+  function unwrapSingleParagraph(htmlText) {
+    return (htmlText || '')
+      .replace(/^\s*<p[^>]*>/i, '')
+      .replace(/<\/p>\s*$/i, '')
+      .trim();
+  }
+
+  function wrapInlineWithDelimiter(content, delimiter) {
+    const source = String(content || '');
+    const leadingMatch = source.match(/^\s+/);
+    const trailingMatch = source.match(/\s+$/);
+    const leading = leadingMatch ? leadingMatch[0] : '';
+    const trailing = trailingMatch ? trailingMatch[0] : '';
+    const core = source.slice(leading.length, source.length - trailing.length);
+    const textOnlyCore = core.replace(/<[^>]+>/g, '').replace(/\u00a0/g, ' ').trim();
+    if (!textOnlyCore) return leading + trailing;
+    return `${leading}${delimiter}${core}${delimiter}${trailing}`;
+  }
+
   function toMarkdownFromHtml(value) {
     let out = value;
+    out = out.replace(/<h1[^>]*>([\s\S]*?)<\/h1>/gi, '\n\n# $1\n\n');
     out = out.replace(/<h2[^>]*>([\s\S]*?)<\/h2>/gi, '\n\n## $1\n\n');
     out = out.replace(/<h3[^>]*>([\s\S]*?)<\/h3>/gi, '\n\n### $1\n\n');
     const imageTokens = [];
@@ -119,19 +350,40 @@
       imageTokens.push(`<img src="${src}" alt="${alt}" data-size="${size}" class="img-size-${size}" />`);
       return `\n\n${key}\n\n`;
     });
+    const tableTokens = [];
+    out = out.replace(/<table\b[\s\S]*?<\/table>/gi, (tableHtml) => {
+      const key = `@@TABLE_TOKEN_${tableTokens.length}@@`;
+      const doc = new DOMParser().parseFromString(tableHtml, 'text/html');
+      const table = doc.body.querySelector('table');
+      tableTokens.push(table ? table.outerHTML : tableHtml);
+      return `\n\n${key}\n\n`;
+    });
     out = out.replace(/<a[^>]*href=(["'])(.*?)\1[^>]*>([\s\S]*?)<\/a>/gi, '[$3]($2)');
-    out = out.replace(/<strong[^>]*>([\s\S]*?)<\/strong>/gi, '**$1**');
-    out = out.replace(/<b[^>]*>([\s\S]*?)<\/b>/gi, '**$1**');
-    out = out.replace(/<em[^>]*>([\s\S]*?)<\/em>/gi, '*$1*');
-    out = out.replace(/<i[^>]*>([\s\S]*?)<\/i>/gi, '*$1*');
-    out = out.replace(/<blockquote[^>]*>([\s\S]*?)<\/blockquote>/gi, '\n\n> $1\n\n');
+    out = out.replace(/<strong[^>]*>([\s\S]*?)<\/strong>/gi, (_m, inner) => wrapInlineWithDelimiter(inner, '**'));
+    out = out.replace(/<b[^>]*>([\s\S]*?)<\/b>/gi, (_m, inner) => wrapInlineWithDelimiter(inner, '**'));
+    out = out.replace(/<em[^>]*>([\s\S]*?)<\/em>/gi, (_m, inner) => wrapInlineWithDelimiter(inner, '*'));
+    out = out.replace(/<i[^>]*>([\s\S]*?)<\/i>/gi, (_m, inner) => wrapInlineWithDelimiter(inner, '*'));
+    out = out.replace(/<blockquote[^>]*>([\s\S]*?)<\/blockquote>/gi, (_m, inner) => {
+      const normalized = unwrapSingleParagraph(inner);
+      return `\n\n> ${normalized}\n\n`;
+    });
     out = out.replace(/<pre[^>]*><code[^>]*>([\s\S]*?)<\/code><\/pre>/gi, '\n\n```\n$1\n```\n\n');
     out = out.replace(/<ul[^>]*>([\s\S]*?)<\/ul>/gi, (_, inner) => {
-      return '\n' + inner.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, '- $1\n') + '\n';
+      return (
+        '\n' +
+        inner.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, (_m, item) => {
+          return `- ${unwrapSingleParagraph(item)}\n`;
+        }) +
+        '\n'
+      );
     });
     out = out.replace(/<ol[^>]*>([\s\S]*?)<\/ol>/gi, (_, inner) => {
       let idx = 0;
-      return '\n' + inner.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, (_m, item) => `${++idx}. ${item}\n`) + '\n';
+      return (
+        '\n' +
+        inner.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, (_m, item) => `${++idx}. ${unwrapSingleParagraph(item)}\n`) +
+        '\n'
+      );
     });
     out = out.replace(/<br\s*\/?>/gi, '\n');
     out = out.replace(/<\/p>/gi, '\n\n');
@@ -145,13 +397,23 @@
     imageTokens.forEach((token, index) => {
       markdownText = markdownText.replace(`@@IMG_TOKEN_${index}@@`, token);
     });
+    tableTokens.forEach((token, index) => {
+      markdownText = markdownText.replace(`@@TABLE_TOKEN_${index}@@`, `\n\n${token}\n\n`);
+    });
     return markdownText;
   }
 
-  function syncBody() {
+  function syncBody(options = {}) {
+    const shouldTrack = options.trackChanges !== false;
+    const shouldAutosave = options.autosave !== false;
     normalizeCanvasImages();
     bodyHtml.value = canvas.innerHTML.trim();
     bodyMd.value = toMarkdownFromHtml(canvas.innerHTML);
+    updateEditorStats();
+    if (shouldTrack) {
+      updateDirtyState();
+      if (shouldAutosave) scheduleAutosave();
+    }
   }
 
   function closeDraftsPanel() {
@@ -386,6 +648,31 @@
     );
   }
 
+  async function insertImageFiles(files) {
+    if (!files.length) return;
+    pendingUploads += files.length;
+    refreshUploadState();
+    let hadFailure = false;
+
+    for (const file of files) {
+      try {
+        const uploadedUrl = await uploadImageFile(file);
+        const baseName = file.name.replace(/\.[^.]+$/, '');
+        insertUploadedImage(uploadedUrl, baseName || 'Image');
+        syncBody();
+      } catch (error) {
+        hadFailure = true;
+        setStatus(error.message || 'Image upload failed', 'error');
+      } finally {
+        pendingUploads = Math.max(0, pendingUploads - 1);
+        refreshUploadState();
+      }
+    }
+    syncBody();
+    if (hadFailure) setStatus('Some images failed to upload.', 'error');
+    else setStatus('Image upload complete.', 'success', 1800);
+  }
+
   async function handleImageDrop(event) {
     const files = Array.from(event.dataTransfer?.files || []).filter(isImageFile);
     if (!files.length) return;
@@ -397,17 +684,15 @@
     const range = getRangeFromPoint(event.clientX, event.clientY);
     if (range) setSelectionRange(range);
     canvas.focus();
+    await insertImageFiles(files);
+  }
 
-    for (const file of files) {
-      try {
-        const uploadedUrl = await uploadImageFile(file);
-        const baseName = file.name.replace(/\.[^.]+$/, '');
-        insertUploadedImage(uploadedUrl, baseName || 'Image');
-      } catch (error) {
-        window.alert(error.message || 'Image upload failed');
-      }
-    }
-    syncBody();
+  async function handleImagePaste(event) {
+    const files = Array.from(event.clipboardData?.files || []).filter(isImageFile);
+    if (!files.length) return;
+    event.preventDefault();
+    canvas.focus();
+    await insertImageFiles(files);
   }
 
   function getCurrentBlock(node) {
@@ -610,6 +895,22 @@
     placeCaretAtEnd(p);
   }
 
+  function replaceBlockWithHeading(block, level, contentHtml = '') {
+    const heading = document.createElement(`h${level}`);
+    heading.innerHTML = contentHtml || '<br>';
+    block.replaceWith(heading);
+    placeCaretAtEnd(heading);
+  }
+
+  function replaceBlockWithList(block, ordered, contentHtml = '') {
+    const list = document.createElement(ordered ? 'ol' : 'ul');
+    const item = document.createElement('li');
+    item.innerHTML = contentHtml || '<br>';
+    list.appendChild(item);
+    block.replaceWith(list);
+    placeCaretAtEnd(item);
+  }
+
   function isCaretAtEndOfBlock(block, range) {
     const afterRange = document.createRange();
     afterRange.selectNodeContents(block);
@@ -705,12 +1006,10 @@
     const rawTrim = rawText.trim();
     debugLog('transform:start', { blockTag: block.tagName, rawText, rawTrim });
 
-    if (/^#{1,3}\s+$/.test(rawText)) {
+    if (/^#{1,3}\s+$/.test(rawText) && ['DIV', 'P'].includes(block.tagName)) {
       isTransforming = true;
       const level = rawText.trim().length;
-      block.textContent = '';
-      placeCaretAtEnd(block);
-      document.execCommand('formatBlock', false, `h${level}`);
+      replaceBlockWithHeading(block, level);
       debugLog('transform:heading-token', { level });
       isTransforming = false;
       syncBody();
@@ -718,13 +1017,11 @@
     }
 
     let headingMatch = rawText.match(/^(#{1,3})\s+(.+)$/);
-    if (headingMatch) {
+    if (headingMatch && ['DIV', 'P'].includes(block.tagName)) {
       isTransforming = true;
       const level = headingMatch[1].length;
       const contentHtml = applyInlineMarkdown(headingMatch[2]);
-      block.innerHTML = contentHtml;
-      placeCaretAtEnd(block);
-      document.execCommand('formatBlock', false, `h${level}`);
+      replaceBlockWithHeading(block, level, contentHtml);
       debugLog('transform:heading-content', { level, content: headingMatch[2] });
       isTransforming = false;
       syncBody();
@@ -758,11 +1055,9 @@
     }
 
     let ulTokenMatch = rawText.match(/^[-*]\s+$/);
-    if (ulTokenMatch) {
+    if (ulTokenMatch && ['DIV', 'P'].includes(block.tagName)) {
       isTransforming = true;
-      block.textContent = '';
-      placeCaretAtEnd(block);
-      document.execCommand('insertUnorderedList');
+      replaceBlockWithList(block, false);
       debugLog('transform:ul-token');
       isTransforming = false;
       syncBody();
@@ -770,11 +1065,9 @@
     }
 
     let ulMatch = rawText.match(/^[-*]\s+(.+)$/);
-    if (ulMatch) {
+    if (ulMatch && ['DIV', 'P'].includes(block.tagName)) {
       isTransforming = true;
-      block.textContent = ulMatch[1];
-      placeCaretAtEnd(block);
-      document.execCommand('insertUnorderedList');
+      replaceBlockWithList(block, false, applyInlineMarkdown(ulMatch[1]));
       debugLog('transform:ul', { content: ulMatch[1] });
       isTransforming = false;
       syncBody();
@@ -782,11 +1075,9 @@
     }
 
     let olTokenMatch = rawText.match(/^1\.\s+$/);
-    if (olTokenMatch) {
+    if (olTokenMatch && ['DIV', 'P'].includes(block.tagName)) {
       isTransforming = true;
-      block.textContent = '';
-      placeCaretAtEnd(block);
-      document.execCommand('insertOrderedList');
+      replaceBlockWithList(block, true);
       debugLog('transform:ol-token');
       isTransforming = false;
       syncBody();
@@ -794,11 +1085,9 @@
     }
 
     let olMatch = rawText.match(/^1\.\s+(.+)$/);
-    if (olMatch) {
+    if (olMatch && ['DIV', 'P'].includes(block.tagName)) {
       isTransforming = true;
-      block.textContent = olMatch[1];
-      placeCaretAtEnd(block);
-      document.execCommand('insertOrderedList');
+      replaceBlockWithList(block, true, applyInlineMarkdown(olMatch[1]));
       debugLog('transform:ol', { content: olMatch[1] });
       isTransforming = false;
       syncBody();
@@ -848,7 +1137,10 @@
     });
   });
 
-  draftsToggle.addEventListener('click', toggleDraftsPanel);
+  draftsToggle.addEventListener('click', (event) => {
+    event.stopPropagation();
+    toggleDraftsPanel();
+  });
   draftDeleteButtons.forEach((button) => {
     button.addEventListener('click', () => {
       if (!window.confirm('Delete this draft?')) return;
@@ -914,6 +1206,7 @@
   });
   canvas.addEventListener('dragleave', () => canvas.classList.remove('is-drag-over'));
   canvas.addEventListener('drop', handleImageDrop);
+  canvas.addEventListener('paste', handleImagePaste);
   document.addEventListener('selectionchange', () => {
     if (activeImage) hideImageToolbar();
     if (!selectionInsideEditor()) hideToolbar();
@@ -928,7 +1221,7 @@
     refreshImageToolbarPosition();
   });
   document.addEventListener('click', (event) => {
-    if (!draftsPanel.hidden && !draftsPanel.contains(event.target) && event.target !== draftsToggle) {
+    if (!draftsPanel.hidden && !draftsPanel.contains(event.target) && !draftsToggle.contains(event.target)) {
       closeDraftsPanel();
     }
     if (
@@ -952,11 +1245,118 @@
     });
   });
 
+  if (titleInput) {
+    titleInput.addEventListener('input', () => {
+      maybeAutoUpdateSlug();
+      syncBody();
+    });
+  }
+  if (slugInput) {
+    slugInput.addEventListener('input', () => {
+      const typed = slugInput.value || '';
+      slugTouched = typed.trim().length > 0;
+      syncBody();
+    });
+    slugInput.addEventListener('blur', () => {
+      const cleaned = createSlug(slugInput.value);
+      if (cleaned !== slugInput.value) slugInput.value = cleaned;
+      if (!cleaned && titleInput) {
+        slugTouched = false;
+        maybeAutoUpdateSlug();
+      }
+      syncBody();
+    });
+  }
+  if (summaryInput) summaryInput.addEventListener('input', () => syncBody());
+  if (publishedAtInput) publishedAtInput.addEventListener('input', () => syncBody());
+
+  if (restoreDraftButton) {
+    restoreDraftButton.addEventListener('click', () => {
+      if (!restoreCandidate) return;
+      applyAutosaveDraft(restoreCandidate);
+      hideRestoreBanner();
+    });
+  }
+  if (discardRestoreButton) {
+    discardRestoreButton.addEventListener('click', () => {
+      restoreCandidate = null;
+      clearAutosave();
+      hideRestoreBanner();
+      setStatus('Local draft discarded.', 'success', 1800);
+    });
+  }
+
+  document.addEventListener('keydown', (event) => {
+    if (!form.contains(document.activeElement)) return;
+    if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key.toLowerCase() === 's') {
+      event.preventDefault();
+      if (saveDraftButton) form.requestSubmit(saveDraftButton);
+      return;
+    }
+    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+      event.preventDefault();
+      if (publishButton) form.requestSubmit(publishButton);
+      return;
+    }
+    if (event.key === 'Escape') {
+      hideToolbar();
+      hideImageToolbar();
+      if (!draftsPanel.hidden) closeDraftsPanel();
+    }
+  });
+
   canvas.addEventListener('input', () => {
     syncBody();
     scheduleTransform();
   });
-  form.addEventListener('submit', syncBody);
+  form.addEventListener('submit', (event) => {
+    syncBody();
+    const submitter = event.submitter;
+    const isPreview = submitter === previewButton;
+    const action = submitter && submitter.value ? submitter.value : 'publish';
+    if (pendingUploads > 0) {
+      event.preventDefault();
+      setStatus('Please wait for image uploads to finish before saving.', 'error');
+      return;
+    }
+    if (!isPreview && action !== 'draft' && !hasMeaningfulContent(bodyMd.value || '')) {
+      event.preventDefault();
+      setStatus('Add some content before publishing.', 'error');
+      return;
+    }
+    if (isPreview) {
+      setStatus('Preview opened in a new tab.', 'success', 1500);
+      return;
+    }
+    hasSubmitted = true;
+    if (autosaveTimer) clearTimeout(autosaveTimer);
+    clearAutosave();
+    setStatus(action === 'draft' ? 'Saving draft...' : 'Publishing...');
+  });
+
+  window.addEventListener('beforeunload', (event) => {
+    if (hasSubmitted) return;
+    if (!isDirty) return;
+    event.preventDefault();
+    event.returnValue = '';
+  });
+
   normalizeCanvasImages();
-  syncBody();
+  syncBody({ trackChanges: false, autosave: false });
+  maybeAutoUpdateSlug();
+  syncBody({ trackChanges: false, autosave: false });
+  initialSnapshot = snapshotState();
+  updateDirtyState();
+
+  restoreCandidate = loadAutosave();
+  const currentSignature = autosaveSignature({
+    title: titleInput ? titleInput.value : '',
+    slug: slugInput ? slugInput.value : '',
+    publishedAt: publishedAtInput ? publishedAtInput.value : '',
+    summary: summaryInput ? summaryInput.value : '',
+    bodyHtml: bodyHtml.value || '',
+  });
+  if (restoreCandidate && autosaveSignature(restoreCandidate) !== currentSignature) {
+    presentRestoreBanner(restoreCandidate);
+  }
 })();
