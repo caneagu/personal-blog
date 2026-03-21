@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as dt
 import html
 import hmac
+import json
 import logging
 import os
 import re
@@ -13,8 +14,9 @@ from dataclasses import dataclass
 from functools import wraps
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import urlparse
-from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for
+from typing import Any
+from urllib.parse import urljoin, urlparse
+from flask import Flask, abort, g, jsonify, redirect, render_template, request, session, url_for
 import markdown
 from markdownify import markdownify as html_to_markdown
 from werkzeug.exceptions import RequestEntityTooLarge
@@ -73,6 +75,7 @@ DEFAULT_SETTINGS = {
     "publisher_name": "Personal Blog",
     "profile_role": "Writer",
     "linkedin_url": "",
+    "social_image_url": "",
     "typography_theme": "classic",
     "home_intro_primary": (
         "This is a minimalist article site focused on clear writing, long-form ideas, and durable links. "
@@ -115,6 +118,15 @@ LOGIN_ATTEMPTS: dict[str, list[float]] = {}
 POSTS_CACHE: dict[str, object] = {"key": None, "posts": []}
 SETTINGS_CACHE: dict[str, object] = {"stamp": None, "settings": DEFAULT_SETTINGS.copy()}
 LOGGER = logging.getLogger(__name__)
+IMAGE_SRC_PATTERN = re.compile(r"""<img[^>]+src=["']([^"']+)["']""", re.IGNORECASE)
+STORAGE_PERMISSION_HINT = (
+    "Storage is not writable. Check bind-mount ownership/permissions on the host. "
+    "For Docker deployments, ensure /app/content and /app/static/uploads are writable by uid/gid 10001."
+)
+
+
+class StorageWriteError(RuntimeError):
+    pass
 
 
 @dataclass
@@ -402,7 +414,11 @@ def delete_post(slug: str) -> bool:
     path = CONTENT_DIR / f"{safe_slug}.md"
     if not path.exists():
         return False
-    path.unlink()
+    try:
+        path.unlink()
+    except OSError as exc:
+        LOGGER.exception("Failed to delete post file: %s", path)
+        raise StorageWriteError(f"Cannot delete {path.name}. {STORAGE_PERMISSION_HINT}") from exc
     invalidate_posts_cache()
     return True
 
@@ -445,18 +461,200 @@ def save_post(
     }
 
     payload = "---\n" + yaml.safe_dump(metadata, sort_keys=False).strip() + "\n---\n\n" + body.strip() + "\n"
-    path.write_text(payload, encoding="utf-8")
-    if previous_path and previous_path.exists():
-        previous_path.unlink()
+    try:
+        path.write_text(payload, encoding="utf-8")
+        if previous_path and previous_path.exists():
+            previous_path.unlink()
+    except OSError as exc:
+        LOGGER.exception("Failed to write post file: %s", path)
+        raise StorageWriteError(f"Cannot write {path.name}. {STORAGE_PERMISSION_HINT}") from exc
     invalidate_posts_cache()
     return cleaned_slug
 
 
 def make_summary(text: str) -> str:
+    return plain_text_excerpt(text, 180)
+
+
+def plain_text_excerpt(text: str, limit: int = 160) -> str:
     normalized = html.unescape(text or "")
     normalized = re.sub(r"<[^>]+>", " ", normalized)
     cleaned = re.sub(r"\s+", " ", re.sub(r"[#>*`_~\-\|]", " ", normalized)).strip()
-    return cleaned[:180] + ("..." if len(cleaned) > 180 else "")
+    if len(cleaned) <= limit:
+        return cleaned
+    if limit <= 3:
+        return cleaned[:limit]
+    return cleaned[: limit - 3].rstrip() + "..."
+
+
+def page_title(primary: str, site_name: str) -> str:
+    normalized_primary = plain_text_excerpt(primary, 90)
+    normalized_site_name = plain_text_excerpt(site_name, 60)
+    if not normalized_primary:
+        return normalized_site_name
+    if not normalized_site_name or normalized_primary == normalized_site_name:
+        return normalized_primary
+    return f"{normalized_primary} | {normalized_site_name}"
+
+
+def site_meta_description(settings: dict[str, str]) -> str:
+    publisher_name = settings.get("publisher_name", "").strip()
+    profile_role = settings.get("profile_role", "").strip()
+    intro = " ".join(
+        part.strip()
+        for part in (
+            settings.get("home_intro_primary", ""),
+            settings.get("home_intro_secondary", ""),
+        )
+        if part.strip()
+    )
+    parts: list[str] = []
+    if publisher_name and profile_role:
+        parts.append(f"{publisher_name} is a {profile_role}.")
+    elif publisher_name:
+        parts.append(f"Writing and essays from {publisher_name}.")
+    if intro:
+        parts.append(intro)
+    description = " ".join(parts).strip()
+    if description:
+        return plain_text_excerpt(description, 160)
+    return plain_text_excerpt(settings.get("site_title", SITE_TITLE), 160)
+
+
+def default_share_image(settings: dict[str, str]) -> str:
+    return sanitize_url(settings.get("social_image_url", "").strip())
+
+
+def absolute_url(url_value: str) -> str:
+    candidate = sanitize_url(url_value)
+    if not candidate:
+        return ""
+    parsed = urlparse(candidate)
+    if parsed.scheme:
+        return candidate
+    return urljoin(request.url_root, candidate)
+
+
+def extract_first_image_url(html_content: str) -> str:
+    match = IMAGE_SRC_PATTERN.search(html_content or "")
+    if not match:
+        return ""
+    return absolute_url(match.group(1))
+
+
+def webpage_schema(title: str, description: str, canonical_url: str, page_type: str = "WebPage") -> dict[str, Any]:
+    return {
+        "@context": "https://schema.org",
+        "@type": page_type,
+        "name": title,
+        "description": description,
+        "url": canonical_url,
+    }
+
+
+def person_schema(settings: dict[str, str], canonical_url: str, description: str) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "@context": "https://schema.org",
+        "@type": "Person",
+        "name": settings.get("publisher_name", "").strip() or settings.get("site_title", SITE_TITLE),
+        "description": description,
+        "url": canonical_url,
+    }
+    profile_role = settings.get("profile_role", "").strip()
+    linkedin_url = settings.get("linkedin_url", "").strip()
+    if profile_role:
+        payload["jobTitle"] = profile_role
+    if linkedin_url:
+        payload["sameAs"] = [linkedin_url]
+    return payload
+
+
+def website_schema(settings: dict[str, str], canonical_url: str, description: str) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "@context": "https://schema.org",
+        "@type": "WebSite",
+        "name": settings.get("site_title", SITE_TITLE),
+        "description": description,
+        "url": canonical_url,
+    }
+    publisher_name = settings.get("publisher_name", "").strip()
+    if publisher_name:
+        payload["publisher"] = {"@type": "Person", "name": publisher_name}
+    return payload
+
+
+def article_schema(
+    post: Post,
+    settings: dict[str, str],
+    canonical_url: str,
+    description: str,
+    image_url: str,
+) -> dict[str, Any]:
+    author_name = settings.get("publisher_name", "").strip() or settings.get("site_title", SITE_TITLE)
+    author_payload: dict[str, Any] = {
+        "@type": "Person",
+        "name": author_name,
+    }
+    linkedin_url = settings.get("linkedin_url", "").strip()
+    if linkedin_url:
+        author_payload["sameAs"] = [linkedin_url]
+
+    payload: dict[str, Any] = {
+        "@context": "https://schema.org",
+        "@type": "BlogPosting",
+        "headline": post.title,
+        "description": description,
+        "datePublished": post.published_at.isoformat(),
+        "dateModified": post.published_at.isoformat(),
+        "mainEntityOfPage": {"@type": "WebPage", "@id": canonical_url},
+        "url": canonical_url,
+        "author": author_payload,
+        "publisher": author_payload,
+    }
+    if image_url:
+        payload["image"] = [image_url]
+    return payload
+
+
+def build_seo_metadata(
+    *,
+    settings: dict[str, str],
+    title: str,
+    description: str,
+    canonical_url: str = "",
+    robots: str = "index,follow",
+    og_type: str = "website",
+    image_url: str = "",
+    structured_data: list[dict[str, Any]] | None = None,
+    author_name: str = "",
+    published_time: str = "",
+    modified_time: str = "",
+) -> dict[str, str]:
+    canonical = absolute_url(canonical_url or request.base_url)
+    resolved_image_url = absolute_url(image_url or default_share_image(settings))
+    g.robots_directive = robots
+
+    json_ld = ""
+    if structured_data:
+        payload: dict[str, Any] | list[dict[str, Any]]
+        payload = structured_data[0] if len(structured_data) == 1 else structured_data
+        json_ld = json.dumps(payload, ensure_ascii=False)
+
+    return {
+        "title": page_title(title, settings.get("site_title", SITE_TITLE)),
+        "description": plain_text_excerpt(description or title, 160),
+        "canonical_url": canonical,
+        "robots": robots,
+        "og_type": og_type,
+        "image_url": resolved_image_url,
+        "image_alt": plain_text_excerpt(title or settings.get("site_title", SITE_TITLE), 120),
+        "site_name": settings.get("site_title", SITE_TITLE),
+        "author_name": plain_text_excerpt(author_name, 120),
+        "published_time": published_time,
+        "modified_time": modified_time,
+        "json_ld": json_ld,
+        "twitter_card": "summary_large_image" if resolved_image_url else "summary",
+    }
 
 
 def resolve_editor_body(raw_html: str, submitted_markdown: str) -> tuple[str, str]:
@@ -595,8 +793,12 @@ def load_site_settings() -> dict[str, str]:
 
 
 def save_site_settings(settings: dict[str, str]) -> None:
-    SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    SETTINGS_PATH.write_text(yaml.safe_dump(settings, sort_keys=False), encoding="utf-8")
+    try:
+        SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        SETTINGS_PATH.write_text(yaml.safe_dump(settings, sort_keys=False), encoding="utf-8")
+    except OSError as exc:
+        LOGGER.exception("Failed to write site settings: %s", SETTINGS_PATH)
+        raise StorageWriteError(f"Cannot save site settings. {STORAGE_PERMISSION_HINT}") from exc
     SETTINGS_CACHE["stamp"] = None
 
 
@@ -665,6 +867,9 @@ def set_response_security_headers(response):
         "base-uri 'self'; "
         "frame-ancestors 'none'"
     )
+    robots_directive = getattr(g, "robots_directive", "")
+    if robots_directive:
+        response.headers["X-Robots-Tag"] = robots_directive
     return response
 
 
@@ -695,14 +900,54 @@ def home():
     settings = load_site_settings()
     posts = list_posts()
     featured = posts[0] if posts else None
-    return render_template("home.html", site_title=settings["site_title"], featured=featured, posts=posts[:6])
+    description = site_meta_description(settings)
+    canonical_url = url_for("home", _external=True)
+    home_title = settings["publisher_name"] or settings["site_title"]
+    if settings.get("profile_role", "").strip():
+        home_title = f"{home_title}, {settings['profile_role']}"
+    seo = build_seo_metadata(
+        settings=settings,
+        title=home_title,
+        description=description,
+        canonical_url=canonical_url,
+        og_type="website",
+        image_url=extract_first_image_url(featured.body_html) if featured else "",
+        structured_data=[
+            website_schema(settings, canonical_url, description),
+            person_schema(settings, canonical_url, description),
+            webpage_schema(home_title, description, canonical_url),
+        ],
+        author_name=settings["publisher_name"],
+    )
+    return render_template(
+        "home.html",
+        site_title=settings["site_title"],
+        featured=featured,
+        posts=posts[:6],
+        seo=seo,
+    )
 
 
 @app.get("/articles")
 def articles():
     settings = load_site_settings()
     posts = list_posts()
-    return render_template("articles.html", site_title=settings["site_title"], posts=posts)
+    description = plain_text_excerpt(
+        f"Published articles by {settings['publisher_name'] or settings['site_title']}. {site_meta_description(settings)}",
+        160,
+    )
+    canonical_url = url_for("articles", _external=True)
+    seo = build_seo_metadata(
+        settings=settings,
+        title=f"Articles by {settings['publisher_name'] or settings['site_title']}",
+        description=description,
+        canonical_url=canonical_url,
+        og_type="website",
+        image_url=extract_first_image_url(posts[0].body_html) if posts else "",
+        structured_data=[webpage_schema("Articles", description, canonical_url, page_type="CollectionPage")],
+        author_name=settings["publisher_name"],
+    )
+    return render_template("articles.html", site_title=settings["site_title"], posts=posts, seo=seo)
 
 
 @app.get("/article/<slug>")
@@ -713,7 +958,27 @@ def article_detail(slug: str):
         abort(404)
     if post.is_draft and not is_authenticated():
         abort(404)
-    return render_template("article_detail.html", site_title=settings["site_title"], post=post)
+    description = plain_text_excerpt(post.summary or post.body_markdown or post.body_html, 160)
+    canonical_url = url_for("article_detail", slug=post.slug, _external=True)
+    image_url = extract_first_image_url(post.body_html)
+    robots = "noindex,nofollow,noarchive" if post.is_draft else "index,follow"
+    seo = build_seo_metadata(
+        settings=settings,
+        title=post.title,
+        description=description,
+        canonical_url=canonical_url,
+        robots=robots,
+        og_type="article",
+        image_url=image_url,
+        structured_data=[
+            article_schema(post, settings, canonical_url, description, image_url),
+            webpage_schema(post.title, description, canonical_url),
+        ],
+        author_name=settings["publisher_name"],
+        published_time=post.published_at.isoformat(),
+        modified_time=post.published_at.isoformat(),
+    )
+    return render_template("article_detail.html", site_title=settings["site_title"], post=post, seo=seo)
 
 
 @app.get("/essays")
@@ -782,11 +1047,19 @@ def editor():
                 message = f"Draft saved: /publish/{slug}"
             else:
                 message = f"Published successfully: /article/{slug}"
-        except ValueError as exc:
+        except (ValueError, StorageWriteError) as exc:
             message = str(exc)
 
     posts = list_posts(include_drafts=True)
     drafts = [post for post in posts if post.is_draft]
+    seo = build_seo_metadata(
+        settings=settings,
+        title="Publish",
+        description="Write, save drafts, and publish articles.",
+        canonical_url=url_for("publish", _external=True),
+        robots="noindex,nofollow,noarchive",
+        author_name=settings["publisher_name"],
+    )
     return render_template(
         "editor.html",
         site_title=settings["site_title"],
@@ -794,6 +1067,7 @@ def editor():
         initial=initial,
         posts=posts,
         drafts=drafts,
+        seo=seo,
     )
 
 
@@ -818,6 +1092,14 @@ def editor_existing(slug: str):
         "status": post.status,
     }
     drafts = [item for item in posts if item.is_draft]
+    seo = build_seo_metadata(
+        settings=settings,
+        title=f"Edit {post.title}",
+        description="Update an existing article draft or published post.",
+        canonical_url=url_for("publish_existing", slug=post.slug, _external=True),
+        robots="noindex,nofollow,noarchive",
+        author_name=settings["publisher_name"],
+    )
     return render_template(
         "editor.html",
         site_title=settings["site_title"],
@@ -825,6 +1107,7 @@ def editor_existing(slug: str):
         initial=initial,
         posts=posts,
         drafts=drafts,
+        seo=seo,
     )
 
 
@@ -861,7 +1144,17 @@ def preview_article():
         body_markdown=body_storage,
         status="draft",
     )
-    return render_template("preview.html", site_title=settings["site_title"], post=post)
+    seo = build_seo_metadata(
+        settings=settings,
+        title=f"Preview: {post.title}",
+        description=plain_text_excerpt(post.summary or post.body_markdown, 160),
+        canonical_url=url_for("publish", _external=True),
+        robots="noindex,nofollow,noarchive",
+        og_type="article",
+        image_url=extract_first_image_url(post.body_html),
+        author_name=settings["publisher_name"],
+    )
+    return render_template("preview.html", site_title=settings["site_title"], post=post, seo=seo)
 
 
 @app.post("/api/upload-image")
@@ -875,10 +1168,14 @@ def upload_image():
     if not extension:
         return jsonify({"error": f"Unsupported image format: {extension or 'unknown'}"}), 400
 
-    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     stored_name = f"{uuid.uuid4().hex}{extension}"
     destination = UPLOAD_DIR / stored_name
-    file.save(destination)
+    try:
+        UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        file.save(destination)
+    except OSError as exc:
+        LOGGER.exception("Failed to save uploaded image: %s", destination)
+        return jsonify({"error": f"Cannot store uploads. {STORAGE_PERMISSION_HINT}"}), 500
 
     return jsonify({"url": url_for("static", filename=f"uploads/{stored_name}")})
 
@@ -887,7 +1184,10 @@ def upload_image():
 @login_required
 def delete_article(slug: str):
     deleted_slug = slugify(slug)
-    delete_post(slug)
+    try:
+        delete_post(slug)
+    except StorageWriteError as exc:
+        abort(500, description=str(exc))
     requested_next = request.form.get("next", "")
     referrer_path = urlparse(request.referrer).path if request.referrer else ""
     next_url = requested_next if is_safe_next_url(requested_next) else referrer_path
@@ -929,15 +1229,58 @@ def rss_feed():
     return app.response_class(xml, mimetype="application/rss+xml")
 
 
+@app.get("/sitemap.xml")
+def sitemap():
+    posts = list_posts()
+    items = [
+        {"loc": url_for("home", _external=True), "lastmod": ""},
+        {"loc": url_for("articles", _external=True), "lastmod": ""},
+    ]
+    for post in posts:
+        items.append(
+            {
+                "loc": url_for("article_detail", slug=post.slug, _external=True),
+                "lastmod": post.published_at.isoformat(),
+            }
+        )
+
+    xml = render_template("sitemap.xml", items=items)
+    return app.response_class(xml, mimetype="application/xml")
+
+
+@app.get("/robots.txt")
+def robots_txt():
+    lines = [
+        "User-agent: *",
+        "Allow: /",
+        "Disallow: /login",
+        "Disallow: /settings",
+        "Disallow: /editor",
+        "Disallow: /publish",
+        "Disallow: /preview",
+        "Disallow: /api/",
+        f"Sitemap: {url_for('sitemap', _external=True)}",
+    ]
+    return app.response_class("\n".join(lines) + "\n", mimetype="text/plain")
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     settings = load_site_settings()
     message = ""
+    seo = build_seo_metadata(
+        settings=settings,
+        title="Login",
+        description="Admin login for publishing and site settings.",
+        canonical_url=url_for("login", _external=True),
+        robots="noindex,nofollow,noarchive",
+        author_name=settings["publisher_name"],
+    )
     if request.method == "POST":
         ip = client_ip()
         if too_many_login_attempts(ip):
             message = "Too many failed attempts. Please try again in a few minutes."
-            return render_template("login.html", site_title=settings["site_title"], message=message), 429
+            return render_template("login.html", site_title=settings["site_title"], message=message, seo=seo), 429
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
         if username == admin_username() and verify_admin_password(password):
@@ -950,7 +1293,7 @@ def login():
             return redirect(next_url)
         record_failed_login(ip)
         message = "Invalid username or password"
-    return render_template("login.html", site_title=settings["site_title"], message=message)
+    return render_template("login.html", site_title=settings["site_title"], message=message, seo=seo)
 
 
 @app.post("/logout")
@@ -974,20 +1317,33 @@ def settings():
             "publisher_name": request.form.get("publisher_name", "").strip() or DEFAULT_SETTINGS["publisher_name"],
             "profile_role": request.form.get("profile_role", "").strip() or DEFAULT_SETTINGS["profile_role"],
             "linkedin_url": linkedin_url,
+            "social_image_url": sanitize_url(request.form.get("social_image_url", "").strip()),
             "typography_theme": sanitize_typography_theme(request.form.get("typography_theme", "")),
             "home_intro_primary": request.form.get("home_intro_primary", "").strip() or DEFAULT_SETTINGS["home_intro_primary"],
             "home_intro_secondary": request.form.get("home_intro_secondary", "").strip()
             or DEFAULT_SETTINGS["home_intro_secondary"],
         }
-        save_site_settings(updated)
-        current = updated
-        message = "Settings saved."
+        try:
+            save_site_settings(updated)
+            current = updated
+            message = "Settings saved."
+        except StorageWriteError as exc:
+            message = str(exc)
+    seo = build_seo_metadata(
+        settings=current,
+        title="Settings",
+        description="Update site branding, homepage copy, and publishing settings.",
+        canonical_url=url_for("settings", _external=True),
+        robots="noindex,nofollow,noarchive",
+        author_name=current["publisher_name"],
+    )
     return render_template(
         "settings.html",
         site_title=current["site_title"],
         settings=current,
         typography_themes=TYPOGRAPHY_THEMES,
         message=message,
+        seo=seo,
     )
 
 

@@ -109,6 +109,7 @@ fi
 
 echo "[3/7] Preparing runtime files and environment..."
 mkdir -p "${APP_DIR}/content" "${APP_DIR}/content/posts" "${APP_DIR}/static/uploads"
+chown -R 10001:10001 "${APP_DIR}/content" "${APP_DIR}/static/uploads"
 if [[ ! -f "${APP_DIR}/.env" ]]; then
   cp "${APP_DIR}/.env.example" "${APP_DIR}/.env"
 fi

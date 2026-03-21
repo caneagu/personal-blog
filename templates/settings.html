@@ -29,6 +29,18 @@
     </label>
 
     <label>
+      Default social image URL
+      <input
+        name="social_image_url"
+        type="text"
+        value="{{ settings.social_image_url }}"
+        maxlength="255"
+        placeholder="/static/uploads/share-card.jpg"
+      />
+      <small class="field-note">Used for Google/LinkedIn/X previews when a page does not have its own image.</small>
+    </label>
+
+    <label>
       Typography style
       <select name="typography_theme" required>
         {% for key, option in typography_themes.items() %}

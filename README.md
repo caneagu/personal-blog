@@ -159,6 +159,7 @@ Compose notes:
 - Service definition is in `docker-compose.yml`.
 - Runtime secrets and tuning are loaded from `.env`.
 - Data persists via bind mounts: `./content` and `./static/uploads`.
+- The container runs as `uid=10001`; those host bind mounts must be writable by `10001:10001`.
 - The same hardening flags are applied (`read_only`, `tmpfs`, dropped capabilities, `no-new-privileges`).
 
 ## Cloud Deployment Checklist
@@ -196,6 +197,7 @@ What it configures:
   - `BLOG_SECURE_COOKIES=1`
 - Starts the app with Docker Compose.
 - Provisions and installs Let's Encrypt certs in Nginx with HTTPS redirect.
+- Repairs ownership on `content/` and `static/uploads/` so the non-root container can write settings, posts, and uploads.
 
 Requirements before running:
 
@@ -290,3 +292,4 @@ PY
 - Login rate limit appears ineffective behind proxy: set `BLOG_TRUST_PROXY_HEADERS=1` only if your proxy sanitizes forwarding headers.
 - Host header rejected: include deployed domain in `BLOG_TRUSTED_HOSTS`.
 - Content disappears after restart: mount persistent volumes for `/app/content` and `/app/static/uploads`.
+- Settings save or publishing fails with `PermissionError` on `/app/content` or `/app/static/uploads`: run `sudo chown -R 10001:10001 /opt/personal-blog/content /opt/personal-blog/static/uploads` on the host, then restart the container.
