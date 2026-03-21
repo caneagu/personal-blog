@@ -30,8 +30,8 @@
     <meta name="twitter:image" content="{{ seo.image_url }}" />
     {% endif %}
     <link rel="alternate" type="application/rss+xml" title="{{ site_title }} RSS" href="{{ url_for('rss_feed', _external=True) }}" />
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
-    <script src="{{ url_for('static', filename='base.js') }}" defer></script>
+    <link rel="stylesheet" href="{{ static_asset_url('styles.css') }}" />
+    <script src="{{ static_asset_url('base.js') }}" defer></script>
     {% if seo is defined and seo.json_ld %}
     <script type="application/ld+json">{{ seo.json_ld | safe }}</script>
     {% endif %}

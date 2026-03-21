@@ -6,6 +6,16 @@
   --rule: #e8e8e8;
   --link: #1f1f1f;
   --code-bg: #f6f6f6;
+  --code-border: #e4e1da;
+  --code-fg: #24211c;
+  --code-muted: #8f8575;
+  --code-keyword: #8f3d1f;
+  --code-string: #0f6b55;
+  --code-number: #9f4d2c;
+  --code-comment: #8b8173;
+  --code-name: #1f4f8f;
+  --code-operator: #5f5a52;
+  --code-accent: #6d3faf;
   --input-bg: #ffffff;
   --input-border: #d6d6d6;
   --tool-bg: #ffffff;
@@ -37,6 +47,16 @@
   --rule: #2d2c2a;
   --link: #f2efe8;
   --code-bg: #1d1d1d;
+  --code-border: #2e2b27;
+  --code-fg: #ece6db;
+  --code-muted: #9d9388;
+  --code-keyword: #ffb38a;
+  --code-string: #8fe2c5;
+  --code-number: #f7b37c;
+  --code-comment: #8d8479;
+  --code-name: #8bb8ff;
+  --code-operator: #d4c9bc;
+  --code-accent: #c8a2ff;
   --input-bg: #1b1b1b;
   --input-border: #3a3a3a;
   --tool-bg: #1b1b1b;
@@ -508,22 +528,181 @@ body[data-typography="leva"] .field-note {
 
 .markdown-body code {
   background: var(--code-bg);
+  color: var(--code-fg);
   padding: 0.08em 0.3em;
   border-radius: 3px;
   font-size: 0.9em;
 }
 
-.markdown-body pre {
+.markdown-body pre,
+.markdown-body .codehilite,
+.editor-canvas pre,
+.editor-canvas .codehilite {
   margin: 0 0 1em;
   background: var(--code-bg);
+  color: var(--code-fg);
   padding: 12px;
   overflow-x: auto;
   border-radius: 4px;
+  border: 1px solid var(--code-border);
 }
 
-.markdown-body pre code {
+.markdown-body .codehilite,
+.editor-canvas .codehilite {
+  padding: 0;
+}
+
+.markdown-body .codehilite pre,
+.editor-canvas .codehilite pre {
+  margin: 0;
+  border: 0;
+  border-radius: 4px;
+  white-space: pre-wrap;
+}
+
+.markdown-body pre code,
+.markdown-body .codehilite code,
+.editor-canvas pre code,
+.editor-canvas .codehilite code {
   background: transparent;
   padding: 0;
+  color: inherit;
+  white-space: inherit;
+}
+
+.markdown-body .codehilite .hll,
+.editor-canvas .codehilite .hll {
+  display: block;
+  background: color-mix(in srgb, var(--code-accent) 18%, transparent);
+}
+
+.markdown-body .codehilite .c,
+.markdown-body .codehilite .ch,
+.markdown-body .codehilite .cm,
+.markdown-body .codehilite .c1,
+.markdown-body .codehilite .cs,
+.editor-canvas .codehilite .c,
+.editor-canvas .codehilite .ch,
+.editor-canvas .codehilite .cm,
+.editor-canvas .codehilite .c1,
+.editor-canvas .codehilite .cs {
+  color: var(--code-comment);
+  font-style: italic;
+}
+
+.markdown-body .codehilite .k,
+.markdown-body .codehilite .kc,
+.markdown-body .codehilite .kd,
+.markdown-body .codehilite .kn,
+.markdown-body .codehilite .kp,
+.markdown-body .codehilite .kr,
+.markdown-body .codehilite .kt,
+.editor-canvas .codehilite .k,
+.editor-canvas .codehilite .kc,
+.editor-canvas .codehilite .kd,
+.editor-canvas .codehilite .kn,
+.editor-canvas .codehilite .kp,
+.editor-canvas .codehilite .kr,
+.editor-canvas .codehilite .kt {
+  color: var(--code-keyword);
+  font-weight: 600;
+}
+
+.markdown-body .codehilite .s,
+.markdown-body .codehilite .sa,
+.markdown-body .codehilite .sb,
+.markdown-body .codehilite .sc,
+.markdown-body .codehilite .dl,
+.markdown-body .codehilite .sd,
+.markdown-body .codehilite .s2,
+.markdown-body .codehilite .se,
+.markdown-body .codehilite .sh,
+.markdown-body .codehilite .si,
+.markdown-body .codehilite .sx,
+.markdown-body .codehilite .sr,
+.markdown-body .codehilite .s1,
+.markdown-body .codehilite .ss,
+.editor-canvas .codehilite .s,
+.editor-canvas .codehilite .sa,
+.editor-canvas .codehilite .sb,
+.editor-canvas .codehilite .sc,
+.editor-canvas .codehilite .dl,
+.editor-canvas .codehilite .sd,
+.editor-canvas .codehilite .s2,
+.editor-canvas .codehilite .se,
+.editor-canvas .codehilite .sh,
+.editor-canvas .codehilite .si,
+.editor-canvas .codehilite .sx,
+.editor-canvas .codehilite .sr,
+.editor-canvas .codehilite .s1,
+.editor-canvas .codehilite .ss {
+  color: var(--code-string);
+}
+
+.markdown-body .codehilite .m,
+.markdown-body .codehilite .mb,
+.markdown-body .codehilite .mf,
+.markdown-body .codehilite .mh,
+.markdown-body .codehilite .mi,
+.markdown-body .codehilite .il,
+.markdown-body .codehilite .mo,
+.editor-canvas .codehilite .m,
+.editor-canvas .codehilite .mb,
+.editor-canvas .codehilite .mf,
+.editor-canvas .codehilite .mh,
+.editor-canvas .codehilite .mi,
+.editor-canvas .codehilite .il,
+.editor-canvas .codehilite .mo {
+  color: var(--code-number);
+}
+
+.markdown-body .codehilite .na,
+.markdown-body .codehilite .nb,
+.markdown-body .codehilite .nc,
+.markdown-body .codehilite .nd,
+.markdown-body .codehilite .ne,
+.markdown-body .codehilite .nf,
+.markdown-body .codehilite .fm,
+.markdown-body .codehilite .nn,
+.markdown-body .codehilite .nt,
+.markdown-body .codehilite .nv,
+.markdown-body .codehilite .vc,
+.markdown-body .codehilite .vg,
+.markdown-body .codehilite .vi,
+.editor-canvas .codehilite .na,
+.editor-canvas .codehilite .nb,
+.editor-canvas .codehilite .nc,
+.editor-canvas .codehilite .nd,
+.editor-canvas .codehilite .ne,
+.editor-canvas .codehilite .nf,
+.editor-canvas .codehilite .fm,
+.editor-canvas .codehilite .nn,
+.editor-canvas .codehilite .nt,
+.editor-canvas .codehilite .nv,
+.editor-canvas .codehilite .vc,
+.editor-canvas .codehilite .vg,
+.editor-canvas .codehilite .vi {
+  color: var(--code-name);
+}
+
+.markdown-body .codehilite .o,
+.markdown-body .codehilite .ow,
+.markdown-body .codehilite .p,
+.markdown-body .codehilite .w,
+.editor-canvas .codehilite .o,
+.editor-canvas .codehilite .ow,
+.editor-canvas .codehilite .p,
+.editor-canvas .codehilite .w {
+  color: var(--code-operator);
+}
+
+.markdown-body .codehilite .bp,
+.markdown-body .codehilite .gh,
+.markdown-body .codehilite .gu,
+.editor-canvas .codehilite .bp,
+.editor-canvas .codehilite .gh,
+.editor-canvas .codehilite .gu {
+  color: var(--code-accent);
 }
 
 .writer-shell {

@@ -199,6 +199,7 @@
     if (summaryInput) summaryInput.value = payload.summary || '';
     canvas.innerHTML = payload.bodyHtml || '<p><br></p>';
     normalizeCanvasImages();
+    normalizeCodeBlocksForEditing();
     syncBody({ autosave: false });
     updateDirtyState();
     slugTouched = Boolean((slugInput?.value || '').trim());
@@ -333,8 +334,42 @@
     return `${leading}${delimiter}${core}${delimiter}${trailing}`;
   }
 
+  function extractCodeText(node) {
+    if (!node) return '';
+    if (node.nodeType === Node.TEXT_NODE) return node.textContent || '';
+    if (node.nodeType !== Node.ELEMENT_NODE) return '';
+
+    const tag = node.tagName;
+    if (tag === 'BR') return '\n';
+
+    let result = '';
+    node.childNodes.forEach((child) => {
+      result += extractCodeText(child);
+    });
+
+    if (['DIV', 'P'].includes(tag) && !result.endsWith('\n')) result += '\n';
+    return result;
+  }
+
   function toMarkdownFromHtml(value) {
-    let out = value;
+    const codeTokens = [];
+    const rootDoc = new DOMParser().parseFromString(`<div>${value || ''}</div>`, 'text/html');
+    const root = rootDoc.body.firstElementChild;
+
+    root.querySelectorAll('pre').forEach((pre) => {
+      const code = pre.querySelector('code');
+      if (!code) return;
+      const classTokens = Array.from(code.classList || []);
+      const languageToken = classTokens.find((token) => token.startsWith('language-')) || '';
+      const language = languageToken ? languageToken.slice('language-'.length).toLowerCase() : '';
+      const source = extractCodeText(code).replace(/\u00a0/g, ' ').replace(/\u200b/g, '').replace(/\n+$/, '');
+      const fence = language ? `\n\n\`\`\`${language}\n${source}\n\`\`\`\n\n` : `\n\n\`\`\`\n${source}\n\`\`\`\n\n`;
+      const token = rootDoc.createTextNode(`@@CODE_TOKEN_${codeTokens.length}@@`);
+      codeTokens.push(fence);
+      pre.replaceWith(token);
+    });
+
+    let out = root.innerHTML;
     out = out.replace(/<h1[^>]*>([\s\S]*?)<\/h1>/gi, '\n\n# $1\n\n');
     out = out.replace(/<h2[^>]*>([\s\S]*?)<\/h2>/gi, '\n\n## $1\n\n');
     out = out.replace(/<h3[^>]*>([\s\S]*?)<\/h3>/gi, '\n\n### $1\n\n');
@@ -367,7 +402,6 @@
       const normalized = unwrapSingleParagraph(inner);
       return `\n\n> ${normalized}\n\n`;
     });
-    out = out.replace(/<pre[^>]*><code[^>]*>([\s\S]*?)<\/code><\/pre>/gi, '\n\n```\n$1\n```\n\n');
     out = out.replace(/<ul[^>]*>([\s\S]*?)<\/ul>/gi, (_, inner) => {
       return (
         '\n' +
@@ -400,6 +434,9 @@
     tableTokens.forEach((token, index) => {
       markdownText = markdownText.replace(`@@TABLE_TOKEN_${index}@@`, `\n\n${token}\n\n`);
     });
+    codeTokens.forEach((token, index) => {
+      markdownText = markdownText.replace(`@@CODE_TOKEN_${index}@@`, token);
+    });
     return markdownText;
   }
 
@@ -414,6 +451,24 @@
       updateDirtyState();
       if (shouldAutosave) scheduleAutosave();
     }
+  }
+
+  function getCodeLanguage(code) {
+    const classTokens = Array.from(code?.classList || []);
+    const token = classTokens.find((value) => value.startsWith('language-'));
+    return token ? token.slice('language-'.length).toLowerCase() : '';
+  }
+
+  function normalizeCodeBlocksForEditing(root = canvas) {
+    root.querySelectorAll('pre').forEach((pre) => {
+      const code = pre.querySelector('code');
+      if (!code) return;
+      const language = getCodeLanguage(code);
+      const source = extractCodeText(code).replace(/\u00a0/g, ' ').replace(/\u200b/g, '').replace(/\n$/, '');
+      code.className = language ? `language-${language}` : '';
+      code.textContent = source;
+      pre.classList.remove('codehilite');
+    });
   }
 
   function closeDraftsPanel() {
@@ -918,6 +973,113 @@
     return afterRange.toString().length === 0;
   }
 
+  function getCaretOffsetWithinNode(node) {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || !node || !node.contains(sel.anchorNode)) return null;
+    const range = sel.getRangeAt(0);
+    const targetNode = range.startContainer;
+    const targetOffset = range.startOffset;
+    let offset = 0;
+    let found = false;
+
+    function walk(current) {
+      if (found || !current) return;
+      if (current === targetNode) {
+        if (current.nodeType === Node.TEXT_NODE) {
+          offset += Math.min(targetOffset, (current.textContent || '').length);
+        } else if (current.nodeType === Node.ELEMENT_NODE) {
+          const limit = Math.min(targetOffset, current.childNodes.length);
+          for (let index = 0; index < limit; index += 1) {
+            offset += extractCodeText(current.childNodes[index]).length;
+          }
+        }
+        found = true;
+        return;
+      }
+
+      if (current.nodeType === Node.TEXT_NODE) {
+        offset += (current.textContent || '').length;
+        return;
+      }
+      if (current.nodeType !== Node.ELEMENT_NODE) return;
+      if (current.tagName === 'BR') {
+        offset += 1;
+        return;
+      }
+
+      current.childNodes.forEach((child) => walk(child));
+    }
+
+    walk(node);
+    return found ? offset : null;
+  }
+
+  function getCodeLineContext(pre) {
+    const code = pre?.querySelector('code');
+    if (!code) return null;
+    const source = extractCodeText(code).replace(/\u00a0/g, ' ').replace(/\u200b/g, '');
+    const caretOffset = getCaretOffsetWithinNode(code);
+    if (caretOffset === null) return null;
+    const lineStart = source.lastIndexOf('\n', Math.max(0, caretOffset - 1)) + 1;
+    const lineEndIndex = source.indexOf('\n', caretOffset);
+    const lineEnd = lineEndIndex === -1 ? source.length : lineEndIndex;
+    return {
+      code,
+      source,
+      caretOffset,
+      lineStart,
+      lineEnd,
+      lineText: source.slice(lineStart, lineEnd),
+    };
+  }
+
+  function setCodeBlockSource(pre, source) {
+    const code = pre?.querySelector('code');
+    if (!code) return;
+    code.textContent = source;
+  }
+
+  function insertTextAtSelection(text) {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    range.deleteContents();
+    const node = document.createTextNode(text);
+    range.insertNode(node);
+    range.setStart(node, node.textContent.length);
+    range.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+
+  function insertCodeLineBreak() {
+    if (document.queryCommandSupported && document.queryCommandSupported('insertLineBreak')) {
+      document.execCommand('insertLineBreak');
+      return;
+    }
+
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    range.deleteContents();
+    const br = document.createElement('br');
+    const spacer = document.createTextNode('\u200b');
+    const fragment = document.createDocumentFragment();
+    fragment.appendChild(br);
+    fragment.appendChild(spacer);
+    range.insertNode(fragment);
+    range.setStart(spacer, 1);
+    range.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+
+  function exitCodeBlock(pre) {
+    insertParagraphAfter(pre);
+    syncBody();
+    scheduleToolbar();
+  }
+
   function handleEnterInFormattedBlock(event) {
     if (event.key !== 'Enter' || event.shiftKey) return;
     const sel = window.getSelection();
@@ -925,13 +1087,50 @@
 
     const block = ensureCurrentBlock();
     if (!block) return;
-    if (!['H1', 'H2', 'H3', 'BLOCKQUOTE', 'PRE'].includes(block.tagName)) return;
+    if (!['H1', 'H2', 'H3', 'BLOCKQUOTE'].includes(block.tagName)) return;
 
     debugLog('enter-formatted:prevent-default', { blockTag: block.tagName });
     event.preventDefault();
     insertParagraphAfter(block);
     syncBody();
     scheduleToolbar();
+  }
+
+  function handleCodeBlockKeydown(event) {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || !sel.isCollapsed || !canvas.contains(sel.anchorNode)) return;
+    const pre = getCurrentBlock(sel.anchorNode);
+    if (!pre || pre.tagName !== 'PRE') return;
+
+    if (event.key === 'Enter' && event.shiftKey) {
+      event.preventDefault();
+      exitCodeBlock(pre);
+      return;
+    }
+
+    if (event.key !== 'Enter' || event.shiftKey) return;
+
+    const line = getCodeLineContext(pre);
+    if (!line) return;
+    if (line.lineText.trim() === '```') {
+      event.preventDefault();
+      const before = line.source.slice(0, line.lineStart);
+      const after = line.lineEnd < line.source.length ? line.source.slice(line.lineEnd + 1) : '';
+      const nextSource = `${before}${after}`.replace(/\n{3,}/g, '\n\n').replace(/\s+$/, '');
+      setCodeBlockSource(pre, nextSource);
+      exitCodeBlock(pre);
+      return;
+    }
+
+    if (!line.lineText.trim() && !line.source.slice(line.caretOffset).trim()) {
+      event.preventDefault();
+      exitCodeBlock(pre);
+      return;
+    }
+
+    event.preventDefault();
+    insertCodeLineBreak();
+    syncBody();
   }
 
   function handleEnterInParagraphBlock(event) {
@@ -942,6 +1141,15 @@
     const block = ensureCurrentBlock();
     if (!block) return;
     if (!['DIV', 'P'].includes(block.tagName)) return;
+    const fence = parseFenceDeclaration(block.textContent.replace(/\u00a0/g, ' '));
+    if (fence && isCaretAtEndOfBlock(block, range)) {
+      debugLog('enter-code-fence:prevent-default', { language: fence.language || '' });
+      event.preventDefault();
+      replaceBlockWithCodeFence(block, fence.language);
+      syncBody();
+      scheduleToolbar();
+      return;
+    }
     if (!isCaretAtEndOfBlock(block, range)) return;
 
     debugLog('enter-paragraph:prevent-default', { blockTag: block.tagName });
@@ -956,6 +1164,21 @@
     p.innerHTML = '<br>';
     pre.replaceWith(p);
     placeCaretAtEnd(p);
+  }
+
+  function parseFenceDeclaration(text) {
+    const match = (text || '').match(/^```([a-z0-9_+-]+)?\s*$/i);
+    if (!match) return null;
+    return { language: (match[1] || '').toLowerCase() };
+  }
+
+  function replaceBlockWithCodeFence(block, language = '') {
+    const pre = document.createElement('pre');
+    const code = document.createElement('code');
+    if (language) code.className = `language-${language}`;
+    pre.appendChild(code);
+    block.replaceWith(pre);
+    placeCaretAtEnd(code);
   }
 
   function handleReverseMarkdownShortcut(event) {
@@ -1094,19 +1317,6 @@
       return;
     }
 
-    if (rawTrim === '```') {
-      isTransforming = true;
-      const pre = document.createElement('pre');
-      const code = document.createElement('code');
-      pre.appendChild(code);
-      block.replaceWith(pre);
-      placeCaretAtEnd(code);
-      debugLog('transform:code-fence');
-      isTransforming = false;
-      syncBody();
-      return;
-    }
-
     if (rawText.includes('**') || rawText.includes('*') || rawText.includes('`') || rawText.includes('](')) {
       const hasTags = /<(a|strong|em|code)\b/i.test(block.innerHTML);
       if (!hasTags) {
@@ -1154,6 +1364,8 @@
   canvas.addEventListener('pointerup', scheduleToolbar);
   canvas.addEventListener('keydown', (event) => {
     debugLog('keydown', { key: event.key, shift: event.shiftKey, meta: event.metaKey, ctrl: event.ctrlKey });
+    handleCodeBlockKeydown(event);
+    if (event.defaultPrevented) return;
     if (event.key === 'Enter' && event.shiftKey) {
       event.preventDefault();
       document.execCommand('insertLineBreak');
@@ -1342,6 +1554,7 @@
   });
 
   normalizeCanvasImages();
+  normalizeCodeBlocksForEditing();
   syncBody({ trackChanges: false, autosave: false });
   maybeAutoUpdateSlug();
   syncBody({ trackChanges: false, autosave: false });

@@ -16,9 +16,14 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin, urlparse
+from bs4 import BeautifulSoup
 from flask import Flask, abort, g, jsonify, redirect, render_template, request, session, url_for
 import markdown
 from markdownify import markdownify as html_to_markdown
+from pygments import highlight
+from pygments.formatters import HtmlFormatter
+from pygments.lexers import get_lexer_by_name
+from pygments.util import ClassNotFound
 from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.security import check_password_hash
 import yaml
@@ -35,6 +40,7 @@ ALLOWED_MARKDOWN_TAGS = {
     "blockquote",
     "br",
     "code",
+    "div",
     "em",
     "h1",
     "h2",
@@ -47,6 +53,7 @@ ALLOWED_MARKDOWN_TAGS = {
     "p",
     "pre",
     "strong",
+    "span",
     "table",
     "tbody",
     "td",
@@ -57,7 +64,11 @@ ALLOWED_MARKDOWN_TAGS = {
 }
 ALLOWED_MARKDOWN_ATTRIBUTES = {
     "a": ["href", "title", "rel"],
+    "code": ["class"],
+    "div": ["class"],
     "img": ["src", "alt", "data-size", "class"],
+    "pre": ["class"],
+    "span": ["class"],
     "th": ["colspan", "rowspan"],
     "td": ["colspan", "rowspan"],
 }
@@ -119,6 +130,8 @@ POSTS_CACHE: dict[str, object] = {"key": None, "posts": []}
 SETTINGS_CACHE: dict[str, object] = {"stamp": None, "settings": DEFAULT_SETTINGS.copy()}
 LOGGER = logging.getLogger(__name__)
 IMAGE_SRC_PATTERN = re.compile(r"""<img[^>]+src=["']([^"']+)["']""", re.IGNORECASE)
+MARKDOWN_FENCED_CODE_PATTERN = re.compile(r"```[\s\S]*?```", re.MULTILINE)
+HTML_CODE_BLOCK_PATTERN = re.compile(r"<pre\b[\s\S]*?</pre>", re.IGNORECASE)
 STORAGE_PERMISSION_HINT = (
     "Storage is not writable. Check bind-mount ownership/permissions on the host. "
     "For Docker deployments, ensure /app/content and /app/static/uploads are writable by uid/gid 10001."
@@ -217,6 +230,17 @@ def sanitize_image_size(size_value: str) -> str:
     return candidate if candidate in allowed else "100"
 
 
+def static_asset_url(filename: str) -> str:
+    path = BASE_DIR / "static" / filename
+    version = ""
+    try:
+        stat = path.stat()
+        version = str(stat.st_mtime_ns)
+    except FileNotFoundError:
+        version = ""
+    return url_for("static", filename=filename, v=version) if version else url_for("static", filename=filename)
+
+
 class HTMLFragmentSanitizer(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -298,12 +322,60 @@ def sanitize_html_fragment(html_content: str) -> str:
     return sanitizer.get_output()
 
 
+def highlight_html_code_blocks(html_content: str) -> str:
+    soup = BeautifulSoup(html_content or "", "html.parser")
+    formatter = HtmlFormatter(nowrap=True)
+
+    for pre in soup.find_all("pre"):
+        code = pre.find("code")
+        if code is None:
+            continue
+        if code.find("span") is not None:
+            continue
+
+        class_tokens = code.get("class", [])
+        language = ""
+        for token in class_tokens:
+            if token.startswith("language-"):
+                language = token.split("-", 1)[1].strip().lower()
+                break
+
+        source = code.get_text()
+        if not source.strip():
+            continue
+
+        try:
+            lexer = get_lexer_by_name(language) if language else get_lexer_by_name("text")
+        except ClassNotFound:
+            lexer = get_lexer_by_name("text")
+
+        highlighted = highlight(source, lexer, formatter)
+        code.clear()
+        fragment = BeautifulSoup(highlighted, "html.parser")
+        for node in list(fragment.contents):
+            code.append(node)
+
+        pre_classes = pre.get("class", [])
+        if "codehilite" not in pre_classes:
+            pre["class"] = [*pre_classes, "codehilite"]
+
+    return str(soup)
+
+
 def render_markdown(markdown_text: str) -> str:
     html_content = markdown.markdown(
         markdown_text or "",
-        extensions=["fenced_code", "tables", "toc", "nl2br"],
+        extensions=["fenced_code", "codehilite", "tables", "toc", "nl2br"],
+        extension_configs={
+            "codehilite": {
+                "css_class": "codehilite",
+                "guess_lang": False,
+                "use_pygments": True,
+            }
+        },
         output_format="html5",
     )
+    html_content = highlight_html_code_blocks(html_content)
     return sanitize_html_fragment(html_content)
 
 
@@ -473,7 +545,10 @@ def save_post(
 
 
 def make_summary(text: str) -> str:
-    return plain_text_excerpt(text, 180)
+    source = text or ""
+    source = MARKDOWN_FENCED_CODE_PATTERN.sub(" ", source)
+    source = HTML_CODE_BLOCK_PATTERN.sub(" ", source)
+    return plain_text_excerpt(source, 180)
 
 
 def plain_text_excerpt(text: str, limit: int = 160) -> str:
@@ -658,13 +733,13 @@ def build_seo_metadata(
 
 
 def resolve_editor_body(raw_html: str, submitted_markdown: str) -> tuple[str, str]:
-    sanitized_html = sanitize_html_fragment(raw_html or "")
-    if sanitized_html:
-        return sanitized_html, sanitized_html
-
     markdown_body = (submitted_markdown or "").strip()
     if markdown_body:
         return markdown_body, render_markdown(markdown_body)
+
+    sanitized_html = sanitize_html_fragment(raw_html or "")
+    if sanitized_html:
+        return sanitized_html, sanitized_html
 
     fallback_markdown = html_to_markdown(raw_html or "").strip() if raw_html else ""
     if fallback_markdown:
@@ -892,6 +967,7 @@ def inject_template_globals():
         "header_domain": host,
         "public_back_href": back_href,
         "public_back_label": back_label,
+        "static_asset_url": static_asset_url,
     }
 
 
