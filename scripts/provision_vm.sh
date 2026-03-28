@@ -11,6 +11,7 @@ LETSENCRYPT_EMAIL=""
 REPO_URL=""
 APP_DIR="/opt/personal-blog"
 BRANCH="main"
+DATA_DIR=""
 
 usage() {
   cat <<'EOF'
@@ -22,6 +23,7 @@ Usage:
     --email admin@example.com \
     --repo-url https://github.com/<owner>/personal-blog.git \
     [--app-dir /opt/personal-blog] \
+    [--data-dir /var/lib/personal-blog] \
     [--branch main]
 
 Notes:
@@ -48,6 +50,10 @@ while [[ $# -gt 0 ]]; do
       APP_DIR="${2:-}"
       shift 2
       ;;
+    --data-dir)
+      DATA_DIR="${2:-}"
+      shift 2
+      ;;
     --branch)
       BRANCH="${2:-}"
       shift 2
@@ -69,6 +75,13 @@ if [[ -z "${DOMAIN}" || -z "${LETSENCRYPT_EMAIL}" || -z "${REPO_URL}" ]]; then
   usage
   exit 1
 fi
+
+if [[ -z "${DATA_DIR}" ]]; then
+  DATA_DIR="/var/lib/$(basename "${APP_DIR}")"
+fi
+
+CONTENT_DATA_DIR="${DATA_DIR}/content"
+UPLOADS_DATA_DIR="${DATA_DIR}/uploads"
 
 set_env_key() {
   local key="$1"
@@ -108,14 +121,31 @@ else
 fi
 
 echo "[3/7] Preparing runtime files and environment..."
-mkdir -p "${APP_DIR}/content" "${APP_DIR}/content/posts" "${APP_DIR}/static/uploads"
-chown -R 10001:10001 "${APP_DIR}/content" "${APP_DIR}/static/uploads"
+mkdir -p \
+  "${APP_DIR}/content" \
+  "${APP_DIR}/content/posts" \
+  "${APP_DIR}/static/uploads" \
+  "${CONTENT_DATA_DIR}" \
+  "${CONTENT_DATA_DIR}/posts" \
+  "${UPLOADS_DATA_DIR}"
+
+if ! find "${CONTENT_DATA_DIR}" -mindepth 1 -print -quit | grep -q .; then
+  cp -a "${APP_DIR}/content/." "${CONTENT_DATA_DIR}/"
+fi
+
+if ! find "${UPLOADS_DATA_DIR}" -mindepth 1 -print -quit | grep -q .; then
+  cp -a "${APP_DIR}/static/uploads/." "${UPLOADS_DATA_DIR}/"
+fi
+
+chown -R 10001:10001 "${CONTENT_DATA_DIR}" "${UPLOADS_DATA_DIR}"
 if [[ ! -f "${APP_DIR}/.env" ]]; then
   cp "${APP_DIR}/.env.example" "${APP_DIR}/.env"
 fi
 
 ENV_FILE="${APP_DIR}/.env"
 set_env_key "HOST_PORT" "127.0.0.1:8080" "${ENV_FILE}"
+set_env_key "BLOG_CONTENT_DIR" "${CONTENT_DATA_DIR}" "${ENV_FILE}"
+set_env_key "BLOG_UPLOADS_DIR" "${UPLOADS_DATA_DIR}" "${ENV_FILE}"
 set_env_key "BLOG_TRUSTED_HOSTS" "${DOMAIN}" "${ENV_FILE}"
 set_env_key "BLOG_TRUST_PROXY_HEADERS" "1" "${ENV_FILE}"
 set_env_key "BLOG_SECURE_COOKIES" "1" "${ENV_FILE}"

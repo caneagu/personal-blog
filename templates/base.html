@@ -39,7 +39,6 @@
   <body
     class="{{ 'is-authenticated' if is_authenticated else 'is-logged-out' }}"
     data-authenticated="{{ '1' if is_authenticated else '0' }}"
-    data-typography="{{ site_settings.typography_theme }}"
     data-login-url="{{ url_for('login') }}"
   >
     {% if is_authenticated %}

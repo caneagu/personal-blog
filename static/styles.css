@@ -1,12 +1,28 @@
+@font-face {
+  font-family: "Newsreader";
+  font-style: normal;
+  font-weight: 200 800;
+  font-display: swap;
+  src: url("fonts/Newsreader.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Newsreader";
+  font-style: italic;
+  font-weight: 200 800;
+  font-display: swap;
+  src: url("fonts/Newsreader-italic.woff2") format("woff2");
+}
+
 :root {
   color-scheme: light dark;
-  --bg: #ffffff;
-  --text: #1f1f1f;
-  --muted: #6f6f6f;
-  --rule: #e8e8e8;
-  --link: #1f1f1f;
-  --code-bg: #f6f6f6;
-  --code-border: #e4e1da;
+  --bg: #f0efea;
+  --text: #141413;
+  --muted: #666666;
+  --rule: #e6e4dd;
+  --link: #141413;
+  --code-bg: #e3dfd7;
+  --code-border: #d8d3ca;
   --code-fg: #24211c;
   --code-muted: #8f8575;
   --code-keyword: #8f3d1f;
@@ -16,22 +32,23 @@
   --code-name: #1f4f8f;
   --code-operator: #5f5a52;
   --code-accent: #6d3faf;
-  --input-bg: #ffffff;
-  --input-border: #d6d6d6;
-  --tool-bg: #ffffff;
-  --tool-border: #d6d6d6;
+  --input-bg: #f8f7f2;
+  --input-border: #d8d3ca;
+  --tool-bg: #f8f7f2;
+  --tool-border: #d8d3ca;
   --floating-bg: #242424;
   --floating-border: #2d2d2d;
   --floating-fg: #ffffff;
   --floating-hover: #3a3a3a;
   --placeholder: #b0b0b0;
-  --flash-bg: #f4fbf4;
-  --flash-border: #d7e7d7;
+  --flash-bg: #ebe8de;
+  --flash-border: #d8d3c6;
   --publish: #1a8917;
-  --selection-bg: #f6e7a8;
-  --selection-fg: #2f2916;
-  --font-body: Georgia, "Times New Roman", Times, serif;
-  --font-heading: Georgia, "Times New Roman", Times, serif;
+  --selection-bg: #e9d98b;
+  --selection-fg: #141413;
+  --strong-text: color-mix(in srgb, var(--text) 88%, var(--bg));
+  --font-body: "Newsreader", Georgia, "Times New Roman", Times, serif;
+  --font-heading: "Newsreader", Georgia, "Times New Roman", Times, serif;
   --font-ui: "Open Sans", "Avenir Next", "Helvetica Neue", "Segoe UI", Helvetica, Arial, sans-serif;
   --leva-fonts-mono: ui-monospace, SFMono-Regular, Menlo, "Roboto Mono", monospace;
   --leva-fonts-sans: system-ui, sans-serif;
@@ -41,13 +58,13 @@
 }
 
 :root[data-theme="dark"] {
-  --bg: #141414;
-  --text: #e8e6e3;
-  --muted: #a7a39b;
-  --rule: #2d2c2a;
-  --link: #f2efe8;
-  --code-bg: #1d1d1d;
-  --code-border: #2e2b27;
+  --bg: #141413;
+  --text: #f0efea;
+  --muted: #b3b3b3;
+  --rule: #444444;
+  --link: #f0efea;
+  --code-bg: #2e2e33;
+  --code-border: #3d3d42;
   --code-fg: #ece6db;
   --code-muted: #9d9388;
   --code-keyword: #ffb38a;
@@ -57,20 +74,21 @@
   --code-name: #8bb8ff;
   --code-operator: #d4c9bc;
   --code-accent: #c8a2ff;
-  --input-bg: #1b1b1b;
-  --input-border: #3a3a3a;
-  --tool-bg: #1b1b1b;
-  --tool-border: #3a3a3a;
+  --input-bg: #1b1b1a;
+  --input-border: #3a3a39;
+  --tool-bg: #1b1b1a;
+  --tool-border: #3a3a39;
   --floating-bg: #efede8;
   --floating-border: #d8d3ca;
   --floating-fg: #1c1c1c;
   --floating-hover: #d8d3ca;
   --placeholder: #8f8a82;
-  --flash-bg: #1d2a1d;
-  --flash-border: #2f4b2f;
+  --flash-bg: #20201e;
+  --flash-border: #3b3b39;
   --publish: #6dd36a;
-  --selection-bg: #6f5d20;
-  --selection-fg: #f7f2df;
+  --selection-bg: #7a6a2b;
+  --selection-fg: #f8f4e8;
+  --strong-text: #fffdf8;
 }
 
 * {
@@ -82,8 +100,9 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-body);
-  line-height: 1.68;
-  font-size: 18px;
+  line-height: 1.72;
+  font-size: 20px;
+  text-rendering: optimizeLegibility;
 }
 
 ::selection {
@@ -96,36 +115,11 @@ body {
   color: var(--selection-fg);
 }
 
-body[data-typography="literary"] {
-  --font-body: Baskerville, "Baskerville Old Face", "Palatino Linotype", "Book Antiqua", serif;
-  --font-heading: Baskerville, "Baskerville Old Face", "Palatino Linotype", "Book Antiqua", serif;
-  --font-ui: "Avenir Next", "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
-}
-
-body[data-typography="modern"] {
-  --font-body: Charter, "Bitstream Charter", Cambria, "Times New Roman", serif;
-  --font-heading: "Avenir Next", "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
-  --font-ui: "Avenir Next", "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
-}
-
-body[data-typography="editorial"] {
-  --font-body: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
-  --font-heading: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
-  --font-ui: "Avenir Next", "Helvetica Neue", "Segoe UI", Helvetica, Arial, sans-serif;
-}
-
-body[data-typography="leva"] {
-  --font-body: var(--leva-fonts-sans);
-  --font-heading: var(--leva-fonts-sans);
-  --font-ui: var(--leva-fonts-sans);
-  --font-size-ui: var(--leva-fontSizes-root);
-}
-
 a {
   color: var(--link);
   text-decoration: underline;
-  text-decoration-thickness: 1px;
-  text-underline-offset: 2px;
+  text-decoration-thickness: 1.35px;
+  text-underline-offset: 0.12em;
 }
 
 .site-header {
@@ -208,6 +202,12 @@ a {
   cursor: pointer;
 }
 
+.theme-toggle {
+  font-family: var(--font-ui);
+  font-size: 1rem;
+  text-align: center;
+}
+
 .icon-circle-link {
   text-decoration: none;
 }
@@ -249,6 +249,7 @@ a {
 .home-intro {
   max-width: none;
   width: 100%;
+  padding-top: 18px;
   margin-bottom: 42px;
 }
 
@@ -262,21 +263,23 @@ a {
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
+  margin-bottom: 18px;
 }
 
 .profile-name {
   margin: 0;
-  font-size: 2.05rem;
-  font-weight: 500;
-  line-height: 1.2;
+  font-size: clamp(2rem, 3.1vw, 2.65rem);
+  font-weight: 600;
+  line-height: 1.12;
   font-family: var(--font-heading);
 }
 
 .profile-role {
-  margin: 3px 0 22px;
+  margin: 0 0 24px;
   color: var(--muted);
-  font-size: 1rem;
-  font-family: var(--font-ui);
+  font-size: 1.08rem;
+  font-style: italic;
+  font-family: var(--font-heading);
 }
 
 .about-summary {
@@ -347,8 +350,9 @@ a {
 .article-archive h1,
 .article-archive h2 {
   margin: 0 0 16px;
-  font-size: 1.25rem;
+  font-size: 1.35rem;
   font-weight: 600;
+  font-family: var(--font-heading);
 }
 
 .article-list {
@@ -362,7 +366,7 @@ a {
   display: grid;
   grid-template-columns: 105px 1fr;
   gap: 16px;
-  padding: 12px 0;
+  padding: 14px 0;
   border-bottom: 1px solid var(--rule);
   align-items: baseline;
 }
@@ -394,21 +398,22 @@ a {
 .article-single {
   max-width: none;
   width: 100%;
+  padding-top: 36px;
 }
 
 .article-single .markdown-body {
   max-width: none;
   width: 100%;
   overflow-wrap: anywhere;
-  font-size: clamp(1.05rem, 0.25vw + 1rem, 1.14rem);
-  line-height: 1.82;
+  font-size: clamp(1.12rem, 0.3vw + 1.03rem, 1.22rem);
+  line-height: 1.8;
 }
 
 .article-single h1 {
-  font-size: clamp(1.58rem, 2.15vw, 1.98rem);
-  line-height: 1.2;
-  margin: 6px 0 8px;
-  font-weight: 500;
+  font-size: clamp(1.9rem, 3.2vw, 2.55rem);
+  line-height: 1.12;
+  margin: 4px 0 10px;
+  font-weight: 600;
   font-family: var(--font-heading);
   color: color-mix(in srgb, var(--text) 92%, var(--bg));
 }
@@ -416,27 +421,15 @@ a {
 .article-date-full {
   margin: 0 0 26px;
   color: var(--muted);
-  font-size: var(--font-size-ui);
+  font-size: 0.96rem;
   font-family: var(--font-ui);
-}
-
-body[data-typography="leva"] .markdown-body code,
-body[data-typography="leva"] .markdown-body pre,
-body[data-typography="leva"] .editor-canvas pre,
-body[data-typography="leva"] .editor-canvas code,
-body[data-typography="leva"] .article-date,
-body[data-typography="leva"] .article-date-full,
-body[data-typography="leva"] .draft-meta,
-body[data-typography="leva"] .field-note {
-  font-family: var(--leva-fonts-mono);
-  font-size: var(--leva-fontSizes-toolTip);
 }
 
 .article-meta-row {
   display: flex;
   align-items: baseline;
   gap: 14px;
-  margin: 34px 0 34px;
+  margin: 30px 0 30px;
 }
 
 .article-meta-row .article-date-full {
@@ -444,9 +437,10 @@ body[data-typography="leva"] .field-note {
 }
 
 .article-summary {
-  margin: -14px 0 24px;
+  margin: -10px 0 24px;
   color: var(--muted);
-  font-size: 1rem;
+  font-size: 1.08rem;
+  line-height: 1.58;
 }
 
 .edit-link-inline {
@@ -457,12 +451,12 @@ body[data-typography="leva"] .field-note {
 .markdown-body ul,
 .markdown-body ol,
 .markdown-body blockquote {
-  margin: 0 0 1.05em;
+  margin: 0 0 1.16em;
 }
 
 .markdown-body blockquote {
-  padding: 0.2em 0 0.2em 0.9em;
-  border-left: 3px solid var(--rule);
+  padding: 0.1em 0 0.1em 1em;
+  border-left: 2px solid var(--rule);
   color: var(--muted);
 }
 
@@ -471,33 +465,33 @@ body[data-typography="leva"] .field-note {
 .editor-canvas strong,
 .editor-canvas b {
   font-weight: 700;
-  color: color-mix(in srgb, var(--text) 88%, var(--bg));
+  color: var(--strong-text);
 }
 
 .markdown-body h1,
 .editor-canvas h1 {
-  margin: 1.45em 0;
-  line-height: 1.24;
-  font-size: 1.44em;
-  font-weight: 500;
+  margin: 1.3em 0 0.75em;
+  line-height: 1.14;
+  font-size: 1.62em;
+  font-weight: 600;
   color: color-mix(in srgb, var(--text) 92%, var(--bg));
 }
 
 .markdown-body h2,
 .editor-canvas h2 {
-  margin: 1.4em 0;
-  line-height: 1.26;
-  font-size: 1.2em;
-  font-weight: 500;
+  margin: 1.24em 0 0.68em;
+  line-height: 1.18;
+  font-size: 1.32em;
+  font-weight: 600;
   color: color-mix(in srgb, var(--text) 92%, var(--bg));
 }
 
 .markdown-body h3,
 .editor-canvas h3 {
-  margin: 1.35em 0;
-  line-height: 1.28;
-  font-size: 1.08em;
-  font-weight: 500;
+  margin: 1.18em 0 0.62em;
+  line-height: 1.22;
+  font-size: 1.14em;
+  font-weight: 600;
   color: color-mix(in srgb, var(--text) 92%, var(--bg));
 }
 
@@ -529,8 +523,8 @@ body[data-typography="leva"] .field-note {
 .markdown-body code {
   background: var(--code-bg);
   color: var(--code-fg);
-  padding: 0.08em 0.3em;
-  border-radius: 3px;
+  padding: 0.14em 0.38em;
+  border-radius: 6px;
   font-size: 0.9em;
 }
 
@@ -541,9 +535,9 @@ body[data-typography="leva"] .field-note {
   margin: 0 0 1em;
   background: var(--code-bg);
   color: var(--code-fg);
-  padding: 12px;
+  padding: 14px;
   overflow-x: auto;
-  border-radius: 4px;
+  border-radius: 8px;
   border: 1px solid var(--code-border);
 }
 
@@ -1007,8 +1001,8 @@ body[data-typography="leva"] .field-note {
   min-height: 58vh;
   border: 0;
   outline: none;
-  font-size: 1.25rem;
-  line-height: 1.8;
+  font-size: 1.2rem;
+  line-height: 1.78;
 }
 
 .editor-canvas pre {
@@ -1119,9 +1113,9 @@ textarea,
 select {
   width: 100%;
   border: 1px solid var(--input-border);
-  border-radius: 3px;
+  border-radius: 6px;
   font: inherit;
-  padding: 9px 10px;
+  padding: 10px 12px;
   background: var(--input-bg);
   color: var(--text);
 }
@@ -1138,6 +1132,7 @@ select {
   padding: 10px 12px;
   border: 1px solid var(--flash-border);
   background: var(--flash-bg);
+  border-radius: 6px;
   font-size: 0.92rem;
 }
 
@@ -1199,7 +1194,7 @@ select {
   }
 
   .profile-name {
-    font-size: clamp(1.7rem, 8vw, 2rem);
+    font-size: clamp(1.8rem, 8vw, 2.2rem);
   }
 
   .profile-role {
@@ -1222,8 +1217,8 @@ select {
   }
 
   .article-single h1 {
-    font-size: clamp(1.52rem, 7.3vw, 1.88rem);
-    margin: 4px 0 6px;
+    font-size: clamp(1.65rem, 7.2vw, 2.1rem);
+    margin: 4px 0 8px;
   }
 
   .article-meta-row {
@@ -1243,8 +1238,8 @@ select {
   }
 
   .article-single .markdown-body {
-    font-size: 1.12rem;
-    line-height: 1.86;
+    font-size: 1.08rem;
+    line-height: 1.8;
   }
 
   .markdown-body p,
@@ -1291,7 +1286,7 @@ select {
   }
 
   .article-single .markdown-body {
-    font-size: 1.07rem;
-    line-height: 1.84;
+    font-size: 1.03rem;
+    line-height: 1.78;
   }
 }

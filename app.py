@@ -84,10 +84,9 @@ DEFAULT_APP_CONFIG = {
 DEFAULT_SETTINGS = {
     "site_title": SITE_TITLE,
     "publisher_name": "Personal Blog",
-    "profile_role": "Writer",
+    "profile_role": "",
     "linkedin_url": "",
     "social_image_url": "",
-    "typography_theme": "classic",
     "home_intro_primary": (
         "This is a minimalist article site focused on clear writing, long-form ideas, and durable links. "
         "It is designed as a clean writing-focused publication with your own content pipeline."
@@ -96,28 +95,6 @@ DEFAULT_SETTINGS = {
         "All articles are authored in markdown and published through the built-in editor. "
         "You can publish new work at any time from the Publish page."
     ),
-}
-TYPOGRAPHY_THEMES: dict[str, dict[str, str]] = {
-    "classic": {
-        "label": "Classic Georgia + Open Sans",
-        "description": "Original Georgia reading feel with clean Open Sans-style UI.",
-    },
-    "editorial": {
-        "label": "Editorial Serif",
-        "description": "A classic magazine-style serif body with neutral UI controls.",
-    },
-    "literary": {
-        "label": "Literary Serif",
-        "description": "A warmer book-like serif tone for long-form reading.",
-    },
-    "modern": {
-        "label": "Modern Hybrid",
-        "description": "A cleaner, more contemporary blend while keeping readable prose.",
-    },
-    "leva": {
-        "label": "Leva Mono/Sans",
-        "description": "System sans with mono accents and compact UI sizing.",
-    },
 }
 CSRF_FIELD_NAME = "csrf_token"
 CSRF_SESSION_KEY = "_csrf_token"
@@ -876,12 +853,6 @@ def save_site_settings(settings: dict[str, str]) -> None:
         raise StorageWriteError(f"Cannot save site settings. {STORAGE_PERMISSION_HINT}") from exc
     SETTINGS_CACHE["stamp"] = None
 
-
-def sanitize_typography_theme(value: str) -> str:
-    candidate = (value or "").strip().lower()
-    return candidate if candidate in TYPOGRAPHY_THEMES else DEFAULT_SETTINGS["typography_theme"]
-
-
 def admin_username() -> str:
     return APP_CONFIG["admin_user"]
 
@@ -1382,7 +1353,6 @@ def logout():
 @login_required
 def settings():
     current = load_site_settings()
-    current["typography_theme"] = sanitize_typography_theme(current.get("typography_theme", ""))
     message = ""
     if request.method == "POST":
         linkedin_url = sanitize_url(request.form.get("linkedin_url", "").strip())
@@ -1391,10 +1361,9 @@ def settings():
         updated = {
             "site_title": request.form.get("site_title", "").strip() or DEFAULT_SETTINGS["site_title"],
             "publisher_name": request.form.get("publisher_name", "").strip() or DEFAULT_SETTINGS["publisher_name"],
-            "profile_role": request.form.get("profile_role", "").strip() or DEFAULT_SETTINGS["profile_role"],
+            "profile_role": request.form.get("profile_role", "").strip(),
             "linkedin_url": linkedin_url,
             "social_image_url": sanitize_url(request.form.get("social_image_url", "").strip()),
-            "typography_theme": sanitize_typography_theme(request.form.get("typography_theme", "")),
             "home_intro_primary": request.form.get("home_intro_primary", "").strip() or DEFAULT_SETTINGS["home_intro_primary"],
             "home_intro_secondary": request.form.get("home_intro_secondary", "").strip()
             or DEFAULT_SETTINGS["home_intro_secondary"],
@@ -1417,7 +1386,6 @@ def settings():
         "settings.html",
         site_title=current["site_title"],
         settings=current,
-        typography_themes=TYPOGRAPHY_THEMES,
         message=message,
         seo=seo,
     )

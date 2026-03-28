@@ -4,7 +4,9 @@
   <div class="profile-heading-row">
     <h1 class="profile-name">{{ site_settings.publisher_name }}</h1>
   </div>
+  {% if site_settings.profile_role | trim %}
   <p class="profile-role">{{ site_settings.profile_role }}</p>
+  {% endif %}
   <div class="about-summary" data-about-summary>
     <div class="about-summary-copy" data-about-copy>
       <p>
