@@ -7,16 +7,8 @@
   {% if site_settings.profile_role | trim %}
   <p class="profile-role">{{ site_settings.profile_role }}</p>
   {% endif %}
-  <div class="about-summary" data-about-summary>
-    <div class="about-summary-copy" data-about-copy>
-      <p>
-        {{ site_settings.home_intro_primary }}
-      </p>
-      <p>
-        {{ site_settings.home_intro_secondary }}
-      </p>
-    </div>
-    <button class="about-summary-toggle" type="button" data-about-toggle aria-expanded="false">Learn more</button>
+  <div class="home-intro-copy">
+    <p>{{ site_settings.home_intro_primary }} <a href="{{ url_for('ama') }}">Ask me anything</a></p>
   </div>
 </section>
 

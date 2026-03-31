@@ -6,15 +6,37 @@
 
   function initInteractiveUi() {
     const toggles = document.querySelectorAll('[data-theme-toggle]');
+    const amaForms = document.querySelectorAll('[data-ama-question-form], [data-ama-vote-form]');
     const body = document.body;
     const isAuthenticated = body?.dataset.authenticated === '1';
     const loginUrl = body?.dataset.loginUrl || '/login';
-    const aboutSummary = document.querySelector('[data-about-summary]');
-    const aboutCopy = aboutSummary?.querySelector('[data-about-copy]');
-    const aboutToggle = aboutSummary?.querySelector('[data-about-toggle]');
     const secretSequence = ['l', 'o', 'g', 'i', 'n'];
     let secretIndex = 0;
     let lastSecretAt = 0;
+    const amaEmailStorageKey = 'amaEmail';
+
+    function isValidEmail(value) {
+      return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((value || '').trim());
+    }
+
+    function storedAmaEmail() {
+      const candidate = localStorage.getItem(amaEmailStorageKey) || '';
+      return isValidEmail(candidate) ? candidate.trim().toLowerCase() : '';
+    }
+
+    function promptForAmaEmail(initialValue) {
+      let candidate = initialValue || storedAmaEmail();
+      while (true) {
+        const response = window.prompt('Enter your email address', candidate);
+        if (response === null) return null;
+        candidate = response.trim().toLowerCase();
+        if (isValidEmail(candidate)) {
+          localStorage.setItem(amaEmailStorageKey, candidate);
+          return candidate;
+        }
+        window.alert('Please enter a valid email address.');
+      }
+    }
 
     function syncLabels() {
       const current = root.getAttribute('data-theme') || 'light';
@@ -39,43 +61,22 @@
 
     syncLabels();
 
-    function initAboutSummary() {
-      if (!aboutSummary || !aboutCopy || !aboutToggle) return;
-      const computed = window.getComputedStyle(aboutCopy);
-      const fontSize = parseFloat(computed.fontSize) || 18;
-      const measuredLineHeight = parseFloat(computed.lineHeight);
-      const lineHeight = Number.isFinite(measuredLineHeight) && measuredLineHeight > 0 ? measuredLineHeight : fontSize * 1.68;
-      if (!Number.isFinite(lineHeight) || lineHeight <= 0) return;
-
-      const collapsedHeight = Math.round(lineHeight * 2);
-      aboutCopy.style.setProperty('--about-collapsed-height', `${collapsedHeight}px`);
-      aboutCopy.style.setProperty('--about-expanded-height', `${aboutCopy.scrollHeight}px`);
-
-      const hasOverflow = aboutCopy.scrollHeight > collapsedHeight + 8;
-      aboutToggle.hidden = !hasOverflow;
-      if (!hasOverflow) {
-        aboutSummary.classList.add('is-expanded');
-        aboutToggle.setAttribute('aria-expanded', 'true');
-        return;
-      }
-
-      aboutSummary.classList.remove('is-expanded');
-      aboutToggle.setAttribute('aria-expanded', 'false');
-      aboutToggle.textContent = 'Learn more';
-    }
-
-    if (aboutToggle && aboutSummary && aboutCopy) {
-      aboutToggle.addEventListener('click', () => {
-        const expanded = aboutSummary.classList.toggle('is-expanded');
-        aboutToggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
-        aboutToggle.textContent = expanded ? 'Show less' : 'Learn more';
-        if (!expanded) {
-          aboutCopy.style.setProperty('--about-expanded-height', `${aboutCopy.scrollHeight}px`);
+    amaForms.forEach((form) => {
+      form.addEventListener('submit', (event) => {
+        const emailInput = form.querySelector('[data-ama-email-input]');
+        if (emailInput && isValidEmail(emailInput.value)) {
+          return;
+        }
+        const email = promptForAmaEmail(emailInput?.value || '');
+        if (!email) {
+          event.preventDefault();
+          return;
+        }
+        if (emailInput) {
+          emailInput.value = email;
         }
       });
-      initAboutSummary();
-      window.addEventListener('resize', initAboutSummary);
-    }
+    });
 
     document.addEventListener('keydown', (event) => {
       if (isAuthenticated) return;

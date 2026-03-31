@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="ama-section" id="ask-me-anything">
+  <div class="profile-heading-row">
+    <h1 class="profile-name">Ask Me Anything</h1>
+  </div>
+  <p class="profile-role">Ask one question, leave your email when you submit, and vote on what should be answered first.</p>
+
+  <form class="ama-form" method="post" action="{{ url_for('ask_question') }}" data-ama-question-form>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+    <input type="hidden" name="email" value="" data-ama-email-input />
+    <input
+      class="ama-question-input"
+      name="question"
+      type="text"
+      placeholder="Ask a question"
+      maxlength="280"
+      required
+      autocomplete="off"
+    />
+    <button type="submit" class="ama-submit">Ask</button>
+  </form>
+
+  {% if ama_questions %}
+  <ol class="ama-list">
+    {% for question in ama_questions %}
+    <li class="ama-item" id="question-{{ question.id }}">
+      <span class="ama-rank">{{ loop.index }}</span>
+      <div class="ama-item-body">
+        <p class="ama-question">{{ question.question }}</p>
+        <p class="ama-meta">{{ question.score }} score · {{ question.upvotes }} up · {{ question.downvotes }} down · {{ question.created_label }}</p>
+      </div>
+      <div class="ama-votes">
+        <form class="inline-form ama-vote-form" method="post" action="{{ url_for('vote_question', question_id=question.id) }}" data-ama-vote-form>
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+          <input type="hidden" name="email" value="" data-ama-email-input />
+          <input type="hidden" name="vote" value="1" />
+          <button type="submit" class="ama-vote-button" aria-label="Upvote question">▲</button>
+        </form>
+        <form class="inline-form ama-vote-form" method="post" action="{{ url_for('vote_question', question_id=question.id) }}" data-ama-vote-form>
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+          <input type="hidden" name="email" value="" data-ama-email-input />
+          <input type="hidden" name="vote" value="-1" />
+          <button type="submit" class="ama-vote-button" aria-label="Downvote question">▼</button>
+        </form>
+      </div>
+    </li>
+    {% endfor %}
+  </ol>
+  {% else %}
+  <p class="muted-text ama-empty">No questions yet. Ask the first one.</p>
+  {% endif %}
+</section>
+{% endblock %}

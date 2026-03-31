@@ -1,0 +1,7 @@
+interface:
+  display_name: "Performance Optimization Review"
+  short_description: "Review performance without sacrificing clarity"
+  default_prompt: "Use $performance-optimization-review to review this repo for performance issues and only recommend optimizations that keep the code simple and understandable."
+
+policy:
+  allow_implicit_invocation: false

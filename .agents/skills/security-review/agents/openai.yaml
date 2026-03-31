@@ -1,0 +1,7 @@
+interface:
+  display_name: "Security Review"
+  short_description: "Review the repo for exploitable security risks"
+  default_prompt: "Use $security-review to review this repo for security issues, prioritize exploitable risks, and cite concrete file locations."
+
+policy:
+  allow_implicit_invocation: false

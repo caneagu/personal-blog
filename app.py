@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import copy
 import html
 import hmac
 import json
@@ -10,6 +11,7 @@ import re
 import secrets
 import time
 import uuid
+import threading
 from dataclasses import dataclass
 from functools import wraps
 from html.parser import HTMLParser
@@ -32,6 +34,7 @@ BASE_DIR = Path(__file__).parent
 CONTENT_DIR = BASE_DIR / "content" / "posts"
 UPLOAD_DIR = BASE_DIR / "static" / "uploads"
 SETTINGS_PATH = BASE_DIR / "content" / "site_settings.yml"
+AMA_PATH = BASE_DIR / "content" / "ama.md"
 APP_CONFIG_PATH = Path(os.getenv("BLOG_CONFIG_PATH", str(BASE_DIR / "content" / "config.yml")))
 SITE_TITLE = "Personal Blog"
 ALLOWED_MARKDOWN_TAGS = {
@@ -89,11 +92,8 @@ DEFAULT_SETTINGS = {
     "social_image_url": "",
     "home_intro_primary": (
         "This is a minimalist article site focused on clear writing, long-form ideas, and durable links. "
-        "It is designed as a clean writing-focused publication with your own content pipeline."
-    ),
-    "home_intro_secondary": (
-        "All articles are authored in markdown and published through the built-in editor. "
-        "You can publish new work at any time from the Publish page."
+        "It is designed as a clean writing-focused publication with your own content pipeline. "
+        "All articles are authored in markdown and published through the built-in editor."
     ),
 }
 CSRF_FIELD_NAME = "csrf_token"
@@ -104,11 +104,14 @@ LOGIN_ATTEMPT_LIMIT = 10
 LOGIN_ATTEMPT_TRACK_LIMIT = 2048
 LOGIN_ATTEMPTS: dict[str, list[float]] = {}
 POSTS_CACHE: dict[str, object] = {"key": None, "posts": []}
+AMA_STATE_CACHE: dict[str, object] = {"stamp": None, "state": {"next_id": 1, "questions": []}}
+AMA_LOCK = threading.Lock()
 SETTINGS_CACHE: dict[str, object] = {"stamp": None, "settings": DEFAULT_SETTINGS.copy()}
 LOGGER = logging.getLogger(__name__)
 IMAGE_SRC_PATTERN = re.compile(r"""<img[^>]+src=["']([^"']+)["']""", re.IGNORECASE)
 MARKDOWN_FENCED_CODE_PATTERN = re.compile(r"```[\s\S]*?```", re.MULTILINE)
 HTML_CODE_BLOCK_PATTERN = re.compile(r"<pre\b[\s\S]*?</pre>", re.IGNORECASE)
+AMA_EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 STORAGE_PERMISSION_HINT = (
     "Storage is not writable. Check bind-mount ownership/permissions on the host. "
     "For Docker deployments, ensure /app/content and /app/static/uploads are writable by uid/gid 10001."
@@ -139,6 +142,75 @@ class Post:
     @property
     def is_draft(self) -> bool:
         return self.status == "draft"
+
+
+@dataclass
+class AmaQuestion:
+    id: str
+    question: str
+    email: str
+    created_at: str
+    votes: dict[str, int]
+    score: int = 0
+    upvotes: int = 0
+    downvotes: int = 0
+
+    @property
+    def created_label(self) -> str:
+        timestamp = parse_ama_timestamp(self.created_at)
+        return timestamp.strftime("%b %-d, %Y") if os.name != "nt" else timestamp.strftime("%b %#d, %Y")
+
+    def recalculate(self) -> None:
+        votes: dict[str, int] = {}
+        upvotes = 0
+        downvotes = 0
+        for raw_email, raw_vote in self.votes.items():
+            email = normalize_email(raw_email)
+            vote = normalize_vote_value(raw_vote)
+            if not email or vote == 0:
+                continue
+            votes[email] = vote
+            if vote > 0:
+                upvotes += 1
+            else:
+                downvotes += 1
+        self.votes = votes
+        self.upvotes = upvotes
+        self.downvotes = downvotes
+        self.score = upvotes - downvotes
+
+    def to_dict(self) -> dict[str, Any]:
+        self.recalculate()
+        return {
+            "id": self.id,
+            "question": self.question,
+            "email": self.email,
+            "created_at": self.created_at,
+            "score": self.score,
+            "upvotes": self.upvotes,
+            "downvotes": self.downvotes,
+            "votes": dict(self.votes),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "AmaQuestion" | None:
+        identifier = str(payload.get("id", "")).strip()
+        question = normalize_question_text(str(payload.get("question", "")))
+        email = normalize_email(str(payload.get("email", "")))
+        created_at = str(payload.get("created_at", "")).strip() or format_ama_timestamp()
+        raw_votes = payload.get("votes", {})
+        votes: dict[str, int] = {}
+        if isinstance(raw_votes, dict):
+            for raw_email, raw_vote in raw_votes.items():
+                normalized_email = normalize_email(str(raw_email))
+                normalized_vote = normalize_vote_value(raw_vote)
+                if normalized_email and normalized_vote:
+                    votes[normalized_email] = normalized_vote
+        if not identifier or not question or not email:
+            return None
+        item = cls(id=identifier, question=question, email=email, created_at=created_at, votes=votes)
+        item.recalculate()
+        return item
 
 
 def load_app_config() -> dict[str, str]:
@@ -363,6 +435,7 @@ app = Flask(__name__)
 app.config["TRUSTED_HOSTS"] = configured_trusted_hosts()
 app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024  # 25MB uploads
 app.config["SECRET_KEY"] = APP_CONFIG["secret_key"]
+app.config["AMA_PATH"] = AMA_PATH
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["SESSION_COOKIE_SECURE"] = env_flag("BLOG_SECURE_COOKIES", True)
@@ -552,14 +625,7 @@ def page_title(primary: str, site_name: str) -> str:
 def site_meta_description(settings: dict[str, str]) -> str:
     publisher_name = settings.get("publisher_name", "").strip()
     profile_role = settings.get("profile_role", "").strip()
-    intro = " ".join(
-        part.strip()
-        for part in (
-            settings.get("home_intro_primary", ""),
-            settings.get("home_intro_secondary", ""),
-        )
-        if part.strip()
-    )
+    intro = settings.get("home_intro_primary", "").strip()
     parts: list[str] = []
     if publisher_name and profile_role:
         parts.append(f"{publisher_name} is a {profile_role}.")
@@ -853,6 +919,219 @@ def save_site_settings(settings: dict[str, str]) -> None:
         raise StorageWriteError(f"Cannot save site settings. {STORAGE_PERMISSION_HINT}") from exc
     SETTINGS_CACHE["stamp"] = None
 
+
+def ama_questions_path() -> Path:
+    return Path(app.config.get("AMA_PATH", AMA_PATH))
+
+
+def empty_ama_state() -> dict[str, Any]:
+    return {"next_id": 1, "questions": []}
+
+
+def normalize_email(value: str) -> str:
+    return (value or "").strip().lower()
+
+
+def is_valid_email(value: str) -> bool:
+    return bool(AMA_EMAIL_PATTERN.fullmatch(normalize_email(value)))
+
+
+def normalize_question_text(value: str) -> str:
+    return " ".join((value or "").split())
+
+
+def normalize_vote_value(value: Any) -> int:
+    try:
+        candidate = int(value)
+    except (TypeError, ValueError):
+        return 0
+    if candidate > 0:
+        return 1
+    if candidate < 0:
+        return -1
+    return 0
+
+
+def format_ama_timestamp(moment: dt.datetime | None = None) -> str:
+    ts = moment or dt.datetime.now(dt.timezone.utc)
+    return ts.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def parse_ama_timestamp(value: str) -> dt.datetime:
+    candidate = (value or "").strip()
+    if candidate.endswith("Z"):
+        candidate = candidate[:-1] + "+00:00"
+    try:
+        parsed = dt.datetime.fromisoformat(candidate)
+    except ValueError:
+        return dt.datetime.fromtimestamp(0, tz=dt.timezone.utc)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed.astimezone(dt.timezone.utc)
+
+
+def ama_sort_key(item: AmaQuestion) -> tuple[int, float, str]:
+    return (-item.score, -parse_ama_timestamp(item.created_at).timestamp(), item.id)
+
+
+def ama_questions_from_state(state: dict[str, Any]) -> list[AmaQuestion]:
+    questions: list[AmaQuestion] = []
+    raw_questions = state.get("questions", [])
+    if isinstance(raw_questions, list):
+        for payload in raw_questions:
+            if isinstance(payload, dict):
+                question = AmaQuestion.from_dict(payload)
+                if question is not None:
+                    questions.append(question)
+    questions.sort(key=ama_sort_key)
+    return questions
+
+
+def ama_state_to_payload(state: dict[str, Any]) -> dict[str, Any]:
+    questions = ama_questions_from_state(state)
+    next_id = state.get("next_id", 1)
+    try:
+        next_id_value = max(int(next_id), 1)
+    except (TypeError, ValueError):
+        next_id_value = 1
+    return {
+        "next_id": next_id_value,
+        "questions": [question.to_dict() for question in questions],
+    }
+
+
+def ama_state_body(questions: list[AmaQuestion]) -> str:
+    lines = ["# Ask Me Anything", ""]
+    if not questions:
+        lines.append("No questions yet.")
+        return "\n".join(lines)
+    lines.extend(["Questions", ""])
+    for index, question in enumerate(questions, start=1):
+        lines.append(
+            f"{index}. {question.question} ({question.score} score, asked {question.created_label})"
+        )
+    return "\n".join(lines)
+
+
+def load_ama_state() -> dict[str, Any]:
+    path = ama_questions_path()
+    stamp: tuple[int, int] | None = None
+    if path.exists():
+        stat = path.stat()
+        stamp = (stat.st_mtime_ns, stat.st_size)
+    if AMA_STATE_CACHE.get("stamp") == stamp:
+        return copy.deepcopy(AMA_STATE_CACHE.get("state", empty_ama_state()))
+
+    state = empty_ama_state()
+    if path.exists():
+        raw_text = path.read_text(encoding="utf-8")
+        frontmatter, _body = split_markdown_frontmatter(raw_text)
+        if isinstance(frontmatter, dict):
+            next_id = frontmatter.get("next_id", 1)
+            try:
+                state["next_id"] = max(int(next_id), 1)
+            except (TypeError, ValueError):
+                state["next_id"] = 1
+            raw_questions = frontmatter.get("questions", [])
+            if isinstance(raw_questions, list):
+                state["questions"] = [payload for payload in raw_questions if isinstance(payload, dict)]
+    AMA_STATE_CACHE["stamp"] = stamp
+    AMA_STATE_CACHE["state"] = copy.deepcopy(state)
+    return copy.deepcopy(state)
+
+
+def save_ama_state(state: dict[str, Any]) -> None:
+    path = ama_questions_path()
+    payload = ama_state_to_payload(state)
+    questions = ama_questions_from_state(payload)
+    content = yaml.safe_dump(payload, sort_keys=False).strip()
+    body = ama_state_body(questions)
+    document = f"---\n{content}\n---\n\n{body}\n"
+    try:
+        with AMA_LOCK:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(document, encoding="utf-8")
+    except OSError as exc:
+        LOGGER.exception("Failed to write AMA state: %s", path)
+        raise StorageWriteError(f"Cannot save AMA questions. {STORAGE_PERMISSION_HINT}") from exc
+    AMA_STATE_CACHE["stamp"] = None
+
+
+def split_markdown_frontmatter(text: str) -> tuple[dict[str, Any], str]:
+    if not text.startswith("---\n"):
+        return {}, text
+    match = re.match(r"\A---\s*\n(.*?)\n---\s*\n?(.*)\Z", text, re.S)
+    if not match:
+        return {}, text
+    frontmatter = yaml.safe_load(match.group(1)) or {}
+    body = match.group(2)
+    if not isinstance(frontmatter, dict):
+        return {}, body
+    return frontmatter, body
+
+
+def get_ama_questions() -> list[AmaQuestion]:
+    return ama_questions_from_state(load_ama_state())
+
+
+def add_ama_question(question_text: str, email: str) -> AmaQuestion:
+    normalized_question = normalize_question_text(question_text)
+    normalized_email = normalize_email(email)
+    if not normalized_question:
+        raise ValueError("Question is required.")
+    if not is_valid_email(normalized_email):
+        raise ValueError("Valid email address required.")
+
+    state = load_ama_state()
+    try:
+        next_id = max(int(state.get("next_id", 1)), 1)
+    except (TypeError, ValueError):
+        next_id = 1
+    question = AmaQuestion(
+        id=f"ama-{next_id:05d}-{uuid.uuid4().hex[:8]}",
+        question=normalized_question,
+        email=normalized_email,
+        created_at=format_ama_timestamp(),
+        votes={},
+    )
+    question.recalculate()
+    questions = ama_questions_from_state(state)
+    questions.append(question)
+    state["next_id"] = next_id + 1
+    state["questions"] = [item.to_dict() for item in sorted(questions, key=ama_sort_key)]
+    save_ama_state(state)
+    return question
+
+
+def vote_ama_question(question_id: str, voter_email: str, vote_value: Any) -> AmaQuestion:
+    normalized_email = normalize_email(voter_email)
+    if not is_valid_email(normalized_email):
+        raise ValueError("Valid email address required.")
+    normalized_vote = normalize_vote_value(vote_value)
+    if normalized_vote == 0:
+        raise ValueError("Vote must be up or down.")
+
+    state = load_ama_state()
+    questions = ama_questions_from_state(state)
+    target: AmaQuestion | None = None
+    for question in questions:
+        if question.id == question_id:
+            target = question
+            break
+    if target is None:
+        raise LookupError("Question not found.")
+
+    target.votes[normalized_email] = normalized_vote
+    target.recalculate()
+    state["questions"] = [item.to_dict() for item in sorted(questions, key=ama_sort_key)]
+    try:
+        state["next_id"] = max(int(state.get("next_id", 1)), len(questions) + 1)
+    except (TypeError, ValueError):
+        state["next_id"] = len(questions) + 1
+    save_ama_state(state)
+    return target
+
+
 def admin_username() -> str:
     return APP_CONFIG["admin_user"]
 
@@ -931,6 +1210,9 @@ def inject_template_globals():
     elif endpoint == "articles":
         back_href = url_for("home")
         back_label = "Back to Main Page"
+    elif endpoint == "ama":
+        back_href = url_for("home")
+        back_label = "Back to Main Page"
     return {
         "site_settings": load_site_settings(),
         "is_authenticated": is_authenticated(),
@@ -973,6 +1255,60 @@ def home():
         posts=posts[:6],
         seo=seo,
     )
+
+
+@app.get("/ama")
+def ama():
+    settings = load_site_settings()
+    ama_questions = get_ama_questions()
+    description = plain_text_excerpt(
+        f"Ask a question for {settings['publisher_name'] or settings['site_title']} and vote on the most important topics.",
+        160,
+    )
+    canonical_url = url_for("ama", _external=True)
+    page_title_value = f"Ask Me Anything | {settings['publisher_name'] or settings['site_title']}"
+    seo = build_seo_metadata(
+        settings=settings,
+        title=page_title_value,
+        description=description,
+        canonical_url=canonical_url,
+        og_type="website",
+        structured_data=[
+            website_schema(settings, canonical_url, description),
+            webpage_schema(page_title_value, description, canonical_url),
+        ],
+        author_name=settings["publisher_name"],
+    )
+    return render_template(
+        "ama.html",
+        site_title=settings["site_title"],
+        ama_questions=ama_questions,
+        seo=seo,
+    )
+
+
+@app.post("/ask")
+def ask_question():
+    question_text = request.form.get("question", "")
+    email = request.form.get("email", "")
+    try:
+        add_ama_question(question_text, email)
+    except (ValueError, StorageWriteError) as exc:
+        abort(400, description=str(exc))
+    return redirect(url_for("ama", _anchor="ask-me-anything"))
+
+
+@app.post("/ask/<question_id>/vote")
+def vote_question(question_id: str):
+    vote_value = request.form.get("vote", "")
+    email = request.form.get("email", "")
+    try:
+        vote_ama_question(question_id, email, vote_value)
+    except LookupError as exc:
+        abort(404, description=str(exc))
+    except (ValueError, StorageWriteError) as exc:
+        abort(400, description=str(exc))
+    return redirect(url_for("ama", _anchor=f"question-{question_id}"))
 
 
 @app.get("/articles")
@@ -1365,8 +1701,6 @@ def settings():
             "linkedin_url": linkedin_url,
             "social_image_url": sanitize_url(request.form.get("social_image_url", "").strip()),
             "home_intro_primary": request.form.get("home_intro_primary", "").strip() or DEFAULT_SETTINGS["home_intro_primary"],
-            "home_intro_secondary": request.form.get("home_intro_secondary", "").strip()
-            or DEFAULT_SETTINGS["home_intro_secondary"],
         }
         try:
             save_site_settings(updated)
