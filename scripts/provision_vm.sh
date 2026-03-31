@@ -22,8 +22,8 @@ Usage:
     --domain blog.example.com \
     --email admin@example.com \
     --repo-url https://github.com/<owner>/personal-blog.git \
-    [--app-dir /opt/personal-blog] \
-    [--data-dir /var/lib/personal-blog] \
+    [--app-dir /home/<user>/personal-blog] \
+    [--data-dir /home/<user>/content] \
     [--branch main]
 
 Notes:
@@ -77,7 +77,8 @@ if [[ -z "${DOMAIN}" || -z "${LETSENCRYPT_EMAIL}" || -z "${REPO_URL}" ]]; then
 fi
 
 if [[ -z "${DATA_DIR}" ]]; then
-  DATA_DIR="/var/lib/$(basename "${APP_DIR}")"
+  APP_PARENT_DIR="$(dirname "${APP_DIR}")"
+  DATA_DIR="${APP_PARENT_DIR}/content"
 fi
 
 CONTENT_DATA_DIR="${DATA_DIR}/content"
@@ -122,18 +123,15 @@ fi
 
 echo "[3/7] Preparing runtime files and environment..."
 mkdir -p \
-  "${APP_DIR}/content" \
-  "${APP_DIR}/content/posts" \
-  "${APP_DIR}/static/uploads" \
   "${CONTENT_DATA_DIR}" \
   "${CONTENT_DATA_DIR}/posts" \
   "${UPLOADS_DATA_DIR}"
 
-if ! find "${CONTENT_DATA_DIR}" -mindepth 1 -print -quit | grep -q .; then
+if [[ -d "${APP_DIR}/content" ]] && ! find "${CONTENT_DATA_DIR}" -mindepth 1 -print -quit | grep -q .; then
   cp -a "${APP_DIR}/content/." "${CONTENT_DATA_DIR}/"
 fi
 
-if ! find "${UPLOADS_DATA_DIR}" -mindepth 1 -print -quit | grep -q .; then
+if [[ -d "${APP_DIR}/static/uploads" ]] && ! find "${UPLOADS_DATA_DIR}" -mindepth 1 -print -quit | grep -q .; then
   cp -a "${APP_DIR}/static/uploads/." "${UPLOADS_DATA_DIR}/"
 fi
 

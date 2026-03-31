@@ -6,5 +6,7 @@ __pycache__/
 .env
 .env.*
 !.env.example
+/content/
+/static/uploads/
 content/config.yml
 .playwright-cli/

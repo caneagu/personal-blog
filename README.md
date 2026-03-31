@@ -66,8 +66,8 @@ python -c "from werkzeug.security import generate_password_hash; print(generate_
 | `BLOG_PORT` | `5000` (local run) | No | Port bind for `python app.py`. |
 | `PORT` | `8080` in container | Yes | Gunicorn bind port in container/cloud. |
 | `HOST_PORT` | `8080` | No | Host-side published port used by Docker Compose. |
-| `BLOG_CONTENT_DIR` | `./content` | No | Host bind mount source for persistent content when using Docker Compose. |
-| `BLOG_UPLOADS_DIR` | `./static/uploads` | No | Host bind mount source for uploaded media when using Docker Compose. |
+| `BLOG_CONTENT_DIR` | `../content` | No | Host bind mount source for persistent content when using Docker Compose; with `~/personal-blog` this resolves to `~/content`. |
+| `BLOG_UPLOADS_DIR` | `../content/uploads` | No | Host bind mount source for uploaded media when using Docker Compose. |
 | `WEB_CONCURRENCY` | `2*CPU+1` (min 2) | No | Gunicorn workers count. |
 | `GUNICORN_THREADS` | `4` | No | Threads per worker. |
 | `GUNICORN_TIMEOUT` | `30` | No | Worker request timeout (seconds). |
@@ -103,8 +103,8 @@ docker run -d --name personal-blog \
   -e BLOG_TRUSTED_HOSTS="blog.example.com,.example.com" \
   -e BLOG_SECURE_COOKIES=1 \
   -e BLOG_DEBUG=0 \
-  -v /var/lib/personal-blog/content:/app/content \
-  -v /var/lib/personal-blog/uploads:/app/static/uploads \
+  -v /home/<user>/content:/app/content \
+  -v /home/<user>/content/uploads:/app/static/uploads \
   personal-blog:prod
 ```
 
@@ -161,7 +161,8 @@ Compose notes:
 - Service definition is in `docker-compose.yml`.
 - Runtime secrets and tuning are loaded from `.env`.
 - Data persists via bind mounts controlled by `BLOG_CONTENT_DIR` and `BLOG_UPLOADS_DIR`.
-- For servers where you publish content, set those paths outside the git checkout so article edits do not dirty the deploy branch.
+- By default, Compose mounts a sibling `~/content` directory outside the repo checkout.
+- Keep those paths outside the git checkout so article edits do not dirty the deploy branch.
 - The container runs as `uid=10001`; those host bind mounts must be writable by `10001:10001`.
 - The same hardening flags are applied (`read_only`, `tmpfs`, dropped capabilities, `no-new-privileges`).
 
@@ -185,26 +186,26 @@ sudo ./scripts/provision_vm.sh \
   --domain blog.example.com \
   --email admin@example.com \
   --repo-url https://github.com/<owner>/personal-blog.git \
-  --app-dir /opt/personal-blog \
-  --data-dir /var/lib/personal-blog \
+  --app-dir /home/<user>/personal-blog \
+  --data-dir /home/<user>/content \
   --branch main
 ```
 
 What it configures:
 
 - Installs Docker, Docker Compose plugin, Nginx, Certbot.
-- Clones/updates the repo in `/opt/personal-blog` (or your `--app-dir`).
-- Stores mutable runtime data outside the git checkout in `/var/lib/<app-dir-name>/` by default.
+- Clones/updates the repo in `/home/<user>/personal-blog` (or your `--app-dir`).
+- Stores mutable runtime data outside the git checkout in a sibling content directory by default.
 - Creates/updates `.env` with production-safe proxy settings:
   - `HOST_PORT=127.0.0.1:8080`
-  - `BLOG_CONTENT_DIR=/var/lib/<app-dir-name>/content`
-  - `BLOG_UPLOADS_DIR=/var/lib/<app-dir-name>/uploads`
+  - `BLOG_CONTENT_DIR=/home/<user>/content`
+  - `BLOG_UPLOADS_DIR=/home/<user>/content/uploads`
   - `BLOG_TRUSTED_HOSTS=<your domain>`
   - `BLOG_TRUST_PROXY_HEADERS=1`
   - `BLOG_SECURE_COOKIES=1`
 - Starts the app with Docker Compose.
 - Provisions and installs Let's Encrypt certs in Nginx with HTTPS redirect.
-- Repairs ownership on `content/` and `static/uploads/` so the non-root container can write settings, posts, and uploads.
+- Repairs ownership on the host content directory so the non-root container can write settings, posts, and uploads.
 
 Requirements before running:
 
@@ -218,37 +219,37 @@ If you publish articles from the live server, do not keep the writable content d
 
 Recommended production layout:
 
-- App code checkout in `/opt/personal-blog`
-- Writable content in `/var/lib/personal-blog/content`
-- Uploaded images in `/var/lib/personal-blog/uploads`
+- App code checkout in `~/personal-blog`
+- Writable content in `~/content` or another host path outside the repo
+- Uploaded images in `~/content/uploads`
 
 One-time migration for an existing server:
 
 ```bash
-sudo mkdir -p /var/lib/personal-blog/content /var/lib/personal-blog/uploads
-sudo cp -a /opt/personal-blog/content/. /var/lib/personal-blog/content/
-sudo cp -a /opt/personal-blog/static/uploads/. /var/lib/personal-blog/uploads/
-sudo chown -R 10001:10001 /var/lib/personal-blog/content /var/lib/personal-blog/uploads
+mkdir -p ~/content ~/content/uploads
+cp -a ~/personal-blog/content/. ~/content/
+cp -a ~/personal-blog/static/uploads/. ~/content/uploads/
+sudo chown -R 10001:10001 ~/content
 ```
 
-Set these in `/opt/personal-blog/.env`:
+Set these in `~/personal-blog/.env`:
 
 ```bash
-BLOG_CONTENT_DIR=/var/lib/personal-blog/content
-BLOG_UPLOADS_DIR=/var/lib/personal-blog/uploads
+BLOG_CONTENT_DIR=/home/<user>/content
+BLOG_UPLOADS_DIR=/home/<user>/content/uploads
 ```
 
 Then rebuild:
 
 ```bash
-cd /opt/personal-blog
+cd ~/personal-blog
 docker compose up -d --build
 ```
 
 After that, article edits stop modifying tracked files in the repo, so updating the app is just:
 
 ```bash
-cd /opt/personal-blog
+cd ~/personal-blog
 git pull --ff-only origin main
 docker compose up -d --build
 ```
@@ -260,8 +261,8 @@ Writing flow:
 1. Go to `/editor` (requires login).
 2. Fill title/date/summary/markdown.
 3. Save draft or publish.
-4. Posts are written to `./content/posts/<slug>.md`.
-5. Uploaded images are written to `./static/uploads/`.
+4. Posts are written to `content/posts/<slug>.md` in the mounted content directory.
+5. Uploaded images are written to the host path behind `BLOG_UPLOADS_DIR`.
 
 Post format:
 
@@ -294,11 +295,10 @@ status: published
 - `./.env.example`: environment template for compose
 - `./gunicorn.conf.py`: Gunicorn runtime config
 - `./templates/`: Jinja templates
-- `./static/`: CSS and uploads
+- `./static/`: CSS and client-side assets
 - `./static/base.js`: global UI/theme script
 - `./static/editor.js`: editor interactions and image uploads
-- `./content/posts/`: markdown posts
-- `./content/config.example.yml`: config template
+- `./config.example.yml`: config template
 - `./scripts/setup.py`: interactive setup script
 
 ## Security and Performance Review (2026-02-26)
@@ -315,7 +315,7 @@ Remaining hardening items (recommended before high-traffic public exposure):
 
 - Add nonce-based CSP reporting (`Content-Security-Policy-Report-Only`) if you want violation telemetry before tightening further directives.
 - Login throttling is process-local memory; in multi-worker or multi-instance deployments, use shared rate limiting (Redis or edge proxy limits).
-- `.env` and `content/config.yml` must never be committed; both are already ignored by `.gitignore`.
+- `.env`, the mounted content directory, and uploaded files must never be committed; they are ignored by `.gitignore`.
 
 ## Pre-Push Validation
 
@@ -339,5 +339,5 @@ PY
 - 400 invalid CSRF token: ensure forms send CSRF token and cookies are preserved by browser/proxy.
 - Login rate limit appears ineffective behind proxy: set `BLOG_TRUST_PROXY_HEADERS=1` only if your proxy sanitizes forwarding headers.
 - Host header rejected: include deployed domain in `BLOG_TRUSTED_HOSTS`.
-- Content disappears after restart: mount persistent volumes for `/app/content` and `/app/static/uploads`.
-- Settings save or publishing fails with `PermissionError` on `/app/content` or `/app/static/uploads`: run `sudo chown -R 10001:10001 /opt/personal-blog/content /opt/personal-blog/static/uploads` on the host, then restart the container.
+- Content disappears after restart: verify `BLOG_CONTENT_DIR` and `BLOG_UPLOADS_DIR` point to persistent host paths outside the repo.
+- Settings save or publishing fails with `PermissionError` on `/app/content` or `/app/static/uploads`: run `sudo chown -R 10001:10001 ~/content` or the configured host content path, then restart the container.

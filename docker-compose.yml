@@ -34,5 +34,5 @@ services:
       GUNICORN_MAX_REQUESTS_JITTER: ${GUNICORN_MAX_REQUESTS_JITTER:-50}
       GUNICORN_LOG_LEVEL: ${GUNICORN_LOG_LEVEL:-info}
     volumes:
-      - ${BLOG_CONTENT_DIR:-./content}:/app/content
-      - ${BLOG_UPLOADS_DIR:-./static/uploads}:/app/static/uploads
+      - ${BLOG_CONTENT_DIR:-../content}:/app/content
+      - ${BLOG_UPLOADS_DIR:-../content/uploads}:/app/static/uploads
