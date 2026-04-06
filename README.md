@@ -19,7 +19,7 @@ A lightweight personal blog with:
 
 1. Create and activate a virtual environment.
 2. Install dependencies.
-3. Generate initial admin config.
+3. Generate initial admin config in the content root.
 4. Start the app.
 
 ```bash
@@ -31,11 +31,13 @@ python scripts/setup.py
 python app.py
 ```
 
+By default, local runs use `./content` if that directory already exists; otherwise they fall back to a sibling `../content` directory. You can override that with `BLOG_CONTENT_ROOT`.
+
 Open [http://127.0.0.1:5000](http://127.0.0.1:5000).
 
 ## Authentication and Secrets
 
-The setup script writes `./content/config.yml` with:
+The setup script writes `<content root>/config.yml` with:
 
 - `admin_user`
 - `admin_password_hash` (PBKDF2 via Werkzeug)
@@ -57,7 +59,8 @@ python -c "from werkzeug.security import generate_password_hash; print(generate_
 | `BLOG_ADMIN_PASSWORD` | empty | No | Plain password fallback (avoid in production). |
 | `BLOG_ADMIN_PASSWORD_HASH` | empty | Yes | Preferred admin password source. |
 | `BLOG_SECRET_KEY` | generated at startup if missing | Yes | Flask session signing key. |
-| `BLOG_CONFIG_PATH` | `content/config.yml` under app root | No | Alternate config file path. |
+| `BLOG_CONTENT_ROOT` | `./content` if present, else `../content` | No | Override the app content root for local/non-Docker runs. |
+| `BLOG_CONFIG_PATH` | `<content root>/config.yml` | No | Alternate config file path. |
 | `BLOG_TRUSTED_HOSTS` | `localhost`, loopback hosts | Yes | Comma-separated allowed hostnames. |
 | `BLOG_TRUST_PROXY_HEADERS` | `0` | No | Set to `1` only behind a trusted reverse proxy that rewrites `X-Forwarded-For`/`X-Real-IP`. |
 | `BLOG_SECURE_COOKIES` | `1` in container | Yes | Keep `1` behind HTTPS. |
@@ -66,7 +69,7 @@ python -c "from werkzeug.security import generate_password_hash; print(generate_
 | `BLOG_PORT` | `5000` (local run) | No | Port bind for `python app.py`. |
 | `PORT` | `8080` in container | Yes | Gunicorn bind port in container/cloud. |
 | `HOST_PORT` | `8080` | No | Host-side published port used by Docker Compose. |
-| `BLOG_CONTENT_DIR` | `../content` | No | Host bind mount source for persistent content when using Docker Compose; with `~/personal-blog` this resolves to `~/content`. |
+| `BLOG_CONTENT_DIR` | `../content` | No | Host bind mount source for persistent content when using Docker Compose; the app also accepts it as a fallback content root when `BLOG_CONTENT_ROOT` is unset. |
 | `BLOG_UPLOADS_DIR` | `../content/uploads` | No | Host bind mount source for uploaded media when using Docker Compose. |
 | `WEB_CONCURRENCY` | `2*CPU+1` (min 2) | No | Gunicorn workers count. |
 | `GUNICORN_THREADS` | `4` | No | Threads per worker. |
@@ -162,6 +165,7 @@ Compose notes:
 - Runtime secrets and tuning are loaded from `.env`.
 - Data persists via bind mounts controlled by `BLOG_CONTENT_DIR` and `BLOG_UPLOADS_DIR`.
 - By default, Compose mounts a sibling `~/content` directory outside the repo checkout.
+- Inside the container, the app still reads `/app/content`; the bind mount provides that path.
 - Keep those paths outside the git checkout so article edits do not dirty the deploy branch.
 - The container runs as `uid=10001`; those host bind mounts must be writable by `10001:10001`.
 - The same hardening flags are applied (`read_only`, `tmpfs`, dropped capabilities, `no-new-privileges`).
@@ -173,7 +177,7 @@ Compose notes:
 3. Set `BLOG_SECRET_KEY` to a long random value and rotate safely.
 4. Use `BLOG_ADMIN_PASSWORD_HASH` instead of plain `BLOG_ADMIN_PASSWORD`.
 5. Persist `/app/content` and `/app/static/uploads` with durable volumes.
-6. Back up `content/` regularly.
+6. Back up the host content directory regularly.
 7. Keep `BLOG_DEBUG=0`.
 8. Keep `BLOG_SECURE_COOKIES=1`.
 
@@ -261,7 +265,7 @@ Writing flow:
 1. Go to `/editor` (requires login).
 2. Fill title/date/summary/markdown.
 3. Save draft or publish.
-4. Posts are written to `content/posts/<slug>.md` in the mounted content directory.
+4. Posts are written to `posts/<slug>.md` under the configured content root.
 5. Uploaded images are written to the host path behind `BLOG_UPLOADS_DIR`.
 
 Post format:
@@ -315,7 +319,7 @@ Remaining hardening items (recommended before high-traffic public exposure):
 
 - Add nonce-based CSP reporting (`Content-Security-Policy-Report-Only`) if you want violation telemetry before tightening further directives.
 - Login throttling is process-local memory; in multi-worker or multi-instance deployments, use shared rate limiting (Redis or edge proxy limits).
-- `.env`, the mounted content directory, and uploaded files must never be committed; they are ignored by `.gitignore`.
+- `.env`, the mounted content directory, and uploaded files must never be committed; runtime content paths are ignored by `.gitignore`.
 
 ## Pre-Push Validation
 
@@ -340,4 +344,5 @@ PY
 - Login rate limit appears ineffective behind proxy: set `BLOG_TRUST_PROXY_HEADERS=1` only if your proxy sanitizes forwarding headers.
 - Host header rejected: include deployed domain in `BLOG_TRUSTED_HOSTS`.
 - Content disappears after restart: verify `BLOG_CONTENT_DIR` and `BLOG_UPLOADS_DIR` point to persistent host paths outside the repo.
+- Local `python app.py` reads the wrong content tree: set `BLOG_CONTENT_ROOT=/absolute/path/to/content` or `BLOG_CONTENT_DIR=/absolute/path/to/content`.
 - Settings save or publishing fails with `PermissionError` on `/app/content` or `/app/static/uploads`: run `sudo chown -R 10001:10001 ~/content` or the configured host content path, then restart the container.

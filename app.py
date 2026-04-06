@@ -31,11 +31,25 @@ from werkzeug.security import check_password_hash
 import yaml
 
 BASE_DIR = Path(__file__).parent
-CONTENT_DIR = BASE_DIR / "content" / "posts"
+REPO_CONTENT_ROOT = BASE_DIR / "content"
+DEFAULT_CONTENT_ROOT = REPO_CONTENT_ROOT if REPO_CONTENT_ROOT.exists() else BASE_DIR.parent / "content"
+
+
+def resolve_path(raw_value: str | None, default: Path) -> Path:
+    if not raw_value:
+        return default
+    path = Path(raw_value).expanduser()
+    if path.is_absolute():
+        return path
+    return (BASE_DIR / path).resolve()
+
+
+CONTENT_ROOT = resolve_path(os.getenv("BLOG_CONTENT_ROOT") or os.getenv("BLOG_CONTENT_DIR"), DEFAULT_CONTENT_ROOT)
+CONTENT_DIR = CONTENT_ROOT / "posts"
 UPLOAD_DIR = BASE_DIR / "static" / "uploads"
-SETTINGS_PATH = BASE_DIR / "content" / "site_settings.yml"
-AMA_PATH = BASE_DIR / "content" / "ama.md"
-APP_CONFIG_PATH = Path(os.getenv("BLOG_CONFIG_PATH", str(BASE_DIR / "content" / "config.yml")))
+SETTINGS_PATH = CONTENT_ROOT / "site_settings.yml"
+AMA_PATH = CONTENT_ROOT / "ama.md"
+APP_CONFIG_PATH = resolve_path(os.getenv("BLOG_CONFIG_PATH"), CONTENT_ROOT / "config.yml")
 SITE_TITLE = "Personal Blog"
 ALLOWED_MARKDOWN_TAGS = {
     "a",

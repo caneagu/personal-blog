@@ -35,10 +35,10 @@ RUN groupadd --system --gid 10001 app \
 
 COPY --from=builder /opt/venv /opt/venv
 COPY --chown=app:app app.py /app/app.py
+COPY --chown=app:app config.example.yml /app/config.example.yml
 COPY --chown=app:app gunicorn.conf.py /app/gunicorn.conf.py
 COPY --chown=app:app templates /app/templates
 COPY --chown=app:app static /app/static
-COPY --chown=app:app content /app/content
 
 RUN mkdir -p /app/content/posts /app/static/uploads \
     && chown -R app:app /app

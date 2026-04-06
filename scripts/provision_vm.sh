@@ -81,7 +81,7 @@ if [[ -z "${DATA_DIR}" ]]; then
   DATA_DIR="${APP_PARENT_DIR}/content"
 fi
 
-CONTENT_DATA_DIR="${DATA_DIR}/content"
+CONTENT_DATA_DIR="${DATA_DIR}"
 UPLOADS_DATA_DIR="${DATA_DIR}/uploads"
 
 set_env_key() {

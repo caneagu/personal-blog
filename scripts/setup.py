@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from getpass import getpass
+import os
 from pathlib import Path
 import secrets
 
@@ -8,7 +9,21 @@ import yaml
 from werkzeug.security import generate_password_hash
 
 BASE_DIR = Path(__file__).resolve().parents[1]
-CONFIG_PATH = BASE_DIR / "content" / "config.yml"
+REPO_CONTENT_ROOT = BASE_DIR / "content"
+DEFAULT_CONTENT_ROOT = REPO_CONTENT_ROOT if REPO_CONTENT_ROOT.exists() else BASE_DIR.parent / "content"
+
+
+def resolve_path(raw_value: str | None, default: Path) -> Path:
+    if not raw_value:
+        return default
+    path = Path(raw_value).expanduser()
+    if path.is_absolute():
+        return path
+    return (BASE_DIR / path).resolve()
+
+
+CONTENT_ROOT = resolve_path(os.getenv("BLOG_CONTENT_ROOT") or os.getenv("BLOG_CONTENT_DIR"), DEFAULT_CONTENT_ROOT)
+CONFIG_PATH = resolve_path(os.getenv("BLOG_CONFIG_PATH"), CONTENT_ROOT / "config.yml")
 
 
 def prompt(label: str, default: str) -> str:

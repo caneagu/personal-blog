@@ -1,13 +1,19 @@
 {% extends "base.html" %}
 {% block content %}
-<article class="article article-single">
-  <h1>{{ post.title }}</h1>
-  <div class="article-meta-row">
-    <p class="article-date-full">{{ post.published_label }}</p>
-    {% if is_authenticated %}
-    <a class="edit-link edit-link-inline" href="{{ url_for('publish_existing', slug=post.slug) }}">Edit this article</a>
-    {% endif %}
-  </div>
-  <section class="markdown-body">{{ post.body_html | safe }}</section>
-</article>
+<div class="article-reading-layout">
+  <nav class="article-toc" aria-label="Article contents" data-article-toc hidden>
+    <p class="article-toc-title">Contents</p>
+    <ol class="article-toc-list" data-article-toc-list></ol>
+  </nav>
+  <article class="article article-single">
+    <h1>{{ post.title }}</h1>
+    <div class="article-meta-row">
+      <p class="article-date-full">{{ post.published_label }}</p>
+      {% if is_authenticated %}
+      <a class="edit-link edit-link-inline" href="{{ url_for('publish_existing', slug=post.slug) }}">Edit this article</a>
+      {% endif %}
+    </div>
+    <section class="markdown-body" data-article-heading-scope>{{ post.body_html | safe }}</section>
+  </article>
+</div>
 {% endblock %}
