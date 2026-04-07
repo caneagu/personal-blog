@@ -708,6 +708,7 @@
     pendingUploads += files.length;
     refreshUploadState();
     let hadFailure = false;
+    const uploadErrors = [];
 
     for (const file of files) {
       try {
@@ -717,14 +718,17 @@
         syncBody();
       } catch (error) {
         hadFailure = true;
-        setStatus(error.message || 'Image upload failed', 'error');
+        uploadErrors.push(error.message || 'Image upload failed');
       } finally {
         pendingUploads = Math.max(0, pendingUploads - 1);
         refreshUploadState();
       }
     }
     syncBody();
-    if (hadFailure) setStatus('Some images failed to upload.', 'error');
+    if (hadFailure) {
+      const message = Array.from(new Set(uploadErrors)).join(' ');
+      setStatus(message || 'Some images failed to upload.', 'error');
+    }
     else setStatus('Image upload complete.', 'success', 1800);
   }
 
